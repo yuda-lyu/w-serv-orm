@@ -59,7 +59,7 @@
 
     
 
-    <h4 class="name" id="WServOrm"><span class="type-signature"></span>new WServOrm<span class="signature">(ds, WOrm, opt<span class="signature-attributes">opt</span>)</span><span class="type-signature"> &rarr; {Object}</span></h4>
+    <h4 class="name" id="WServOrm"><span class="type-signature"></span>new WServOrm<span class="signature">(ds, WOrm, url, db, opt<span class="signature-attributes">opt</span>)</span><span class="type-signature"> &rarr; {Object}</span></h4>
 
     
 
@@ -71,7 +71,7 @@
     
     <dt class="tag-source">Source:</dt>
     <dd class="tag-source"><ul class="dummy"><li>
-        <a href="WServOrm.mjs.html">WServOrm.mjs</a>, <a href="WServOrm.mjs.html#line74">line 74</a>
+        <a href="WServOrm.mjs.html">WServOrm.mjs</a>, <a href="WServOrm.mjs.html#line76">line 76</a>
     </li></ul></dd>
     
 
@@ -124,7 +124,8 @@
 
     <h5>Example</h5>
     
-    <pre class="prettyprint"><code>import WOrm from 'w-orm-mongodb/src/WOrmMongodb.mjs' //自行選擇引用ORMimport ds from './schema/index.mjs' //先行建置schemaimport WServOrm from './src/WServOrm.mjs'//stlet st = {    dbUsername: 'username',    dbPassword: 'password',    dbName: 'wservorm',    dbIP: 'localhost',    dbPort: 27017,}//WServOrmlet opt = {    url: `mongodb://${st.dbUsername}:${st.dbPassword}@${st.dbIP}:${st.dbPort}`,    db: st.dbName,    getUserById: null,    bCheckUser: false,    bExcludeWhenNotAdmin: false,}let r = WServOrm(ds, WOrm, opt)console.log(r) //回傳server用orm相關函數// => {//   backup: [AsyncFunction: backup],//   recover: [AsyncFunction: recover],//   woItems: {//     tests: EventEmitter {//       _events: [Object: null prototype] {},//       _eventsCount: 0,//       _maxListeners: undefined,//       select: [AsyncFunction: select],//       insert: [AsyncFunction: insert],//       save: [AsyncFunction: save],//       del: [AsyncFunction: del],//       delAll: [AsyncFunction: delAll],//       selectGfs: [AsyncFunction: selectGfs],//       insertGfs: [AsyncFunction: insertGfs],//       delGfs: [AsyncFunction: delGfs],//       delAllGfs: [AsyncFunction: delAllGfs],//       [Symbol(kCapture)]: false//     }//   },//   addFunCheck: [Function: addFunCheck],//   addFunPreProcessing: [Function: addFunPreProcessing],//   addFunPostProcessing: [Function: addFunPostProcessing],//   procOrm: [AsyncFunction: procOrm]// }// export default r</code></pre>
+    <pre class="prettyprint"><code>import WOrm from 'w-orm-mongodb/src/WOrmMongodb.mjs' //自行選擇引用ORMimport ds from './schema/index.mjs' //先行建置schemaimport WServOrm from './src/WServOrm.mjs'//stlet st = {    dbUsername: 'username',    dbPassword: 'password',    dbName: 'wservorm',    dbIP: 'localhost',    dbPort: 27017,}//url, dblet url = `mongodb://${st.dbUsername}:${st.dbPassword}@${st.dbIP}:${st.dbPort}`let db = st.dbName//WServOrmlet opt = {    getUserById: null,    bCheckUser: false,    bExcludeWhenNotAdmin: false,}let r = WServOrm(ds, WOrm, url, db, opt)
+console.log(r) //回傳server用orm相關函數// => {//   backup: [AsyncFunction: backup],//   recover: [AsyncFunction: recover],//   woItems: {//     tests: EventEmitter {//       _events: [Object: null prototype] {},//       _eventsCount: 0,//       _maxListeners: undefined,//       select: [AsyncFunction: select],//       insert: [AsyncFunction: insert],//       save: [AsyncFunction: save],//       del: [AsyncFunction: del],//       delAll: [AsyncFunction: delAll],//       selectGfs: [AsyncFunction: selectGfs],//       insertGfs: [AsyncFunction: insertGfs],//       delGfs: [AsyncFunction: delGfs],//       delAllGfs: [AsyncFunction: delAllGfs],//       [Symbol(kCapture)]: false//     }//   },//   addFunCheck: [Function: addFunCheck],//   addFunPreProcessing: [Function: addFunPreProcessing],//   addFunPostProcessing: [Function: addFunPostProcessing],//   procOrm: [AsyncFunction: procOrm]// }// export default r</code></pre>
 
 
 
@@ -228,6 +229,76 @@
 
         <tr>
             
+                <td class="name"><code>url</code></td>
+            
+
+            <td class="type">
+            
+                
+<span class="param-type">String</span>
+
+
+            
+            </td>
+
+            
+                <td class="attributes">
+                
+
+                
+
+                
+                </td>
+            
+
+            
+                <td class="default">
+                
+                </td>
+            
+
+            <td class="description last"><p>輸入資料庫連線位址字串</p></td>
+        </tr>
+
+    
+
+        <tr>
+            
+                <td class="name"><code>db</code></td>
+            
+
+            <td class="type">
+            
+                
+<span class="param-type">String</span>
+
+
+            
+            </td>
+
+            
+                <td class="attributes">
+                
+
+                
+
+                
+                </td>
+            
+
+            
+                <td class="default">
+                
+                </td>
+            
+
+            <td class="description last"><p>輸入資料庫名稱字串</p></td>
+        </tr>
+
+    
+
+        <tr>
+            
                 <td class="name"><code>opt</code></td>
             
 
@@ -286,84 +357,6 @@
     </thead>
 
     <tbody>
-    
-
-        <tr>
-            
-                <td class="name"><code>url</code></td>
-            
-
-            <td class="type">
-            
-                
-<span class="param-type">String</span>
-
-
-            
-            </td>
-
-            
-                <td class="attributes">
-                
-                    &lt;optional><br>
-                
-
-                
-
-                
-                </td>
-            
-
-            
-                <td class="default">
-                
-                    <code>''</code>
-                
-                </td>
-            
-
-            <td class="description last"><p>輸入資料庫連線位址字串，預設''</p></td>
-        </tr>
-
-    
-
-        <tr>
-            
-                <td class="name"><code>db</code></td>
-            
-
-            <td class="type">
-            
-                
-<span class="param-type">String</span>
-
-
-            
-            </td>
-
-            
-                <td class="attributes">
-                
-                    &lt;optional><br>
-                
-
-                
-
-                
-                </td>
-            
-
-            
-                <td class="default">
-                
-                    <code>''</code>
-                
-                </td>
-            
-
-            <td class="description last"><p>輸入資料庫名稱字串，預設''</p></td>
-        </tr>
-
     
 
         <tr>
@@ -569,7 +562,7 @@
 <br class="clear">
 
 <footer>
-    Documentation generated by <a href="https://github.com/jsdoc3/jsdoc">JSDoc 3.6.10</a> on Tue Apr 12 2022 16:54:25 GMT+0800 (台北標準時間) using the <a href="https://github.com/clenemt/docdash">docdash</a> theme.
+    Documentation generated by <a href="https://github.com/jsdoc3/jsdoc">JSDoc 3.6.10</a> on Thu Apr 14 2022 16:02:44 GMT+0800 (台北標準時間) using the <a href="https://github.com/clenemt/docdash">docdash</a> theme.
 </footer>
 
 <script>prettyPrint();</script>

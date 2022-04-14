@@ -36,15 +36,17 @@ let st = {
     dbPort: 27017,
 }
 
+//url, db
+let url = `mongodb://${st.dbUsername}:${st.dbPassword}@${st.dbIP}:${st.dbPort}`
+let db = st.dbName
+
 //WServOrm
 let opt = {
-    url: `mongodb://${st.dbUsername}:${st.dbPassword}@${st.dbIP}:${st.dbPort}`,
-    db: st.dbName,
     getUserById: null,
     bCheckUser: false,
     bExcludeWhenNotAdmin: false,
 }
-let r = WServOrm(ds, WOrm, opt)
+let r = WServOrm(ds, WOrm, url, db, opt)
 console.log(r) //回傳server用orm相關函數
 // => {
 //   backup: [AsyncFunction: backup],

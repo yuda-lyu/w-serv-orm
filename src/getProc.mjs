@@ -149,14 +149,14 @@ function getProc(mapOrm, opt = {}) {
     //save _mapOrm
     _mapOrm = mapOrm
 
-    //save _getUserById, 不事先檢查, 因若bCheckUser=false可允許不給
-    _getUserById = get(opt, 'getUserById')
-
     //bCheckUser
     bCheckUser = get(opt, 'bCheckUser')
     if (!isbol(bCheckUser)) {
         bCheckUser = true
     }
+
+    //save _getUserById, 不事先檢查, 因若bCheckUser=false可允許不給
+    _getUserById = get(opt, 'getUserById')
 
     //bExcludeWhenNotAdmin
     bExcludeWhenNotAdmin = get(opt, 'bExcludeWhenNotAdmin')

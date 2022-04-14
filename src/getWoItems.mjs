@@ -1,13 +1,11 @@
-import get from 'lodash/get'
 import each from 'lodash/each'
 import keys from 'lodash/keys'
 import size from 'lodash/size'
 import isfun from 'wsemi/src/isfun'
-import iseobj from 'wsemi/src/iseobj'
 import isestr from 'wsemi/src/isestr'
 
 
-function getWoItems(ds, WOrm, opt = {}) {
+function getWoItems(ds, WOrm, url, db) {
 
     //check ds
     if (size(ds) === 0) {
@@ -21,21 +19,13 @@ function getWoItems(ds, WOrm, opt = {}) {
         throw new Error('invalid WOrm')
     }
 
-    //check opt
-    if (!iseobj(opt)) {
-        console.log('opt', opt)
-        throw new Error('invalid opt')
-    }
-
-    //url
-    let url = get(opt, 'url')
+    //check url
     if (!isestr(url)) {
         console.log('url', url)
         throw new Error('invalid url')
     }
 
-    //db
-    let db = get(opt, 'db')
+    //check db
     if (!isestr(db)) {
         console.log('db', db)
         throw new Error('invalid db')

@@ -10,9 +10,9 @@ import getProc from './getProc.mjs'
  * @class
  * @param {Object} ds 輸入資料表設定物件
  * @param {Object} WOrm 輸入資料庫ORM物件
+ * @param {String} url 輸入資料庫連線位址字串
+ * @param {String} db 輸入資料庫名稱字串
  * @param {Object} [opt={}] 輸入設定物件，預設{}
- * @param {String} [opt.url=''] 輸入資料庫連線位址字串，預設''
- * @param {String} [opt.db=''] 輸入資料庫名稱字串，預設''
  * @param {Boolean} [opt.bCheckUser=true] 輸入是否檢查使用者資訊布林值，預設true
  * @param {Function} [opt.getUserById=null] 輸入當bCheckUser=true時依照使用者ID取得使用者資訊物件函數，預設null
  * @param {Boolean} [opt.bExcludeWhenNotAdmin=true] 輸入使用ORM的select方法時是否自動刪除數據內isActive欄位之布林值，預設true
@@ -32,16 +32,18 @@ import getProc from './getProc.mjs'
  *     dbPort: 27017,
  * }
  *
+ * //url, db
+ * let url = `mongodb://${st.dbUsername}:${st.dbPassword}@${st.dbIP}:${st.dbPort}`
+ * let db = st.dbName
+ *
  * //WServOrm
  * let opt = {
- *     url: `mongodb://${st.dbUsername}:${st.dbPassword}@${st.dbIP}:${st.dbPort}`,
- *     db: st.dbName,
  *     getUserById: null,
  *     bCheckUser: false,
  *     bExcludeWhenNotAdmin: false,
  * }
- * let r = WServOrm(ds, WOrm, opt)
- * console.log(r) //回傳server用orm相關函數
+ * let r = WServOrm(ds, WOrm, url, db, opt)
+console.log(r) //回傳server用orm相關函數
  * // => {
  * //   backup: [AsyncFunction: backup],
  * //   recover: [AsyncFunction: recover],
@@ -71,15 +73,10 @@ import getProc from './getProc.mjs'
  * // export default r
  *
  */
-function WServOrm(ds, WOrm, opt = {}) {
-    // url:'',
-    // db:'',
-    // bCheckUser: true,
-    // getUserById: null,
-    // bExcludeWhenNotAdmin: true,
+function WServOrm(ds, WOrm, url, db, opt = {}) {
 
     //getWoItems
-    let woItems = getWoItems(ds, WOrm, opt)
+    let woItems = getWoItems(ds, WOrm, url, db)
     // console.log('woItems', woItems)
 
     //getMapOrm
