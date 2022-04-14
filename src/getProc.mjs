@@ -2,12 +2,12 @@ import get from 'lodash/get'
 import size from 'lodash/size'
 import filter from 'lodash/filter'
 import isarr from 'wsemi/src/isarr.mjs'
-import isestr from 'wsemi/src/isestr'
-import haskey from 'wsemi/src/haskey'
-import pmSeries from 'wsemi/src/pmSeries'
-import pmChain from 'wsemi/src/pmChain'
-import isfun from 'wsemi/src/isfun'
-import isbol from 'wsemi/src/isbol'
+import isestr from 'wsemi/src/isestr.mjs'
+import haskey from 'wsemi/src/haskey.mjs'
+import pmSeries from 'wsemi/src/pmSeries.mjs'
+import pmChain from 'wsemi/src/pmChain.mjs'
+import isfun from 'wsemi/src/isfun.mjs'
+import isbol from 'wsemi/src/isbol.mjs'
 
 
 let _funChecks = []

@@ -1,8 +1,8 @@
 import each from 'lodash/each'
 import keys from 'lodash/keys'
 import size from 'lodash/size'
-import isfun from 'wsemi/src/isfun'
-import isestr from 'wsemi/src/isestr'
+import isfun from 'wsemi/src/isfun.mjs'
+import isestr from 'wsemi/src/isestr.mjs'
 
 
 function getWoItems(ds, WOrm, url, db) {

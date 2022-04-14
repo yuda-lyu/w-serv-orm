@@ -5,7 +5,7 @@ import size from 'lodash/size'
 import nowms2str from 'wsemi/src/nowms2str.mjs'
 import isarr from 'wsemi/src/isarr.mjs'
 import iseobj from 'wsemi/src/iseobj.mjs'
-import isestr from 'wsemi/src/isestr'
+import isestr from 'wsemi/src/isestr.mjs'
 
 
 let _ds = null
