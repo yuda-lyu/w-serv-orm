@@ -49,6 +49,9 @@ function getSettings(opt = {}) {
         if (!isestr(get(st, 'dbType'))) {
             console.log('invalid st.dbType', st.dbType)
         }
+        if (!isestr(get(st, 'dbName'))) {
+            console.log('invalid st.dbName', st.dbName)
+        }
 
         //url, db
         let url = `${st.dbType}://${st.dbUsername}:${st.dbPassword}@${st.dbIP}:${st.dbPort}`
