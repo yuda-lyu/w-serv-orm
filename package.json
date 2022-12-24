@@ -1,6 +1,6 @@
 {
   "name": "w-serv-orm",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "main": "dist/w-serv-orm.umd.js",
   "dependencies": {
     "json5": "^2.2.2",
