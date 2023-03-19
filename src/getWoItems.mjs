@@ -1,6 +1,6 @@
 import each from 'lodash/each'
 import keys from 'lodash/keys'
-import size from 'lodash/size'
+import iseobj from 'wsemi/src/iseobj.mjs'
 import isfun from 'wsemi/src/isfun.mjs'
 import isestr from 'wsemi/src/isestr.mjs'
 
@@ -8,7 +8,7 @@ import isestr from 'wsemi/src/isestr.mjs'
 function getWoItems(ds, WOrm, url, db) {
 
     //check ds
-    if (size(ds) === 0) {
+    if (!iseobj(ds)) {
         console.log('ds', ds)
         throw new Error('invalid ds')
     }

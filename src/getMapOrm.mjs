@@ -16,6 +16,7 @@ function adjustData(woName, userId, data, mode = 'save') { //mode: 'insert', 'sa
 
     //check
     if (!iseobj(_ds)) {
+        console.log('ds', _ds)
         throw new Error('invalid ds')
     }
 
