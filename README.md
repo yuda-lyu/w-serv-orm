@@ -20,7 +20,7 @@ npm i w-serv-orm
 ```
 
 #### Example for server:
-> **Link:** [[dev source code](https://github.com/yuda-lyu/w-serv-orm/blob/master/g.mOrm.mjs)]
+> **Link:** [[dev source code](https://github.com/yuda-lyu/w-serv-orm/blob/master/g-mOrm.mjs)]
 ```alias
 import WOrm from 'w-orm-mongodb/src/WOrmMongodb.mjs' //自行選擇引用ORM
 import ds from './schema/index.mjs' //先行建置schema
