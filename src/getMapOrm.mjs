@@ -181,7 +181,7 @@ async function mapOrm(userId, woName, mode, input) {
 
         //check
         if (!iseobj(input)) {
-            return Promise.reject('mix僅支援輸入ltdtdiff結果物件')
+            return Promise.reject('mix僅支援輸入ltdtDiffByKey結果物件')
         }
 
         //rt,r

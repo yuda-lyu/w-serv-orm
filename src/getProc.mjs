@@ -58,7 +58,7 @@ async function procOrm(userId, woName, mode, input) {
     }
 
     //check
-    if (!isestr(userId)) {
+    if (bCheckUser && !isestr(userId)) {
         console.log(`找不到使用者主鍵: (${userId})`)
         return Promise.reject(`找不到使用者主鍵`)
     }
