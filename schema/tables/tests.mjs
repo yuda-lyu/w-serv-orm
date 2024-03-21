@@ -1,5 +1,5 @@
-import map from 'lodash/map'
-import keys from 'lodash/keys'
+import map from 'lodash-es/map'
+import keys from 'lodash-es/keys'
 import genID from 'wsemi/src/genID.mjs'
 import dtmapping from 'wsemi/src/dtmapping.mjs'
 import dtpick from 'wsemi/src/dtpick.mjs'

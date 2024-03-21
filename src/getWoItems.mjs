@@ -1,5 +1,5 @@
-import each from 'lodash/each'
-import keys from 'lodash/keys'
+import each from 'lodash-es/each'
+import keys from 'lodash-es/keys'
 import iseobj from 'wsemi/src/iseobj.mjs'
 import isfun from 'wsemi/src/isfun.mjs'
 import isestr from 'wsemi/src/isestr.mjs'

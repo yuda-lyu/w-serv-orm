@@ -1,6 +1,6 @@
-import get from 'lodash/get'
-import size from 'lodash/size'
-import filter from 'lodash/filter'
+import get from 'lodash-es/get'
+import size from 'lodash-es/size'
+import filter from 'lodash-es/filter'
 import isarr from 'wsemi/src/isarr.mjs'
 import isestr from 'wsemi/src/isestr.mjs'
 import haskey from 'wsemi/src/haskey.mjs'
@@ -59,7 +59,8 @@ async function procOrm(userId, woName, mode, input) {
 
     //check
     if (bCheckUser && !isestr(userId)) {
-        console.log(`找不到使用者主鍵: (${userId})`)
+        console.log('userId',userId)
+        console.log('找不到使用者主鍵')
         return Promise.reject(`找不到使用者主鍵`)
     }
 
@@ -79,7 +80,8 @@ async function procOrm(userId, woName, mode, input) {
 
         //check
         if (!oSelf) {
-            console.log(`找不到使用者資訊: (${userId})`)
+            console.log('userId',userId)
+            console.log('找不到使用者資訊')
             return Promise.reject(`找不到使用者資訊`)
         }
 
@@ -97,7 +99,9 @@ async function procOrm(userId, woName, mode, input) {
 
         //check
         if (isActive !== 'y') {
-            console.log(`使用者被停權或無有效使用者資訊: (${userId})`)
+            console.log('userId',userId)
+            console.log('oSelf',oSelf)
+            console.log('使用者被停權或無有效使用者資訊')
             return Promise.reject(`使用者被停權或無有效使用者資訊`)
         }
 

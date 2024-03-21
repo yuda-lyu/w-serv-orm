@@ -1,4 +1,4 @@
-import get from 'lodash/get'
+import get from 'lodash-es/get'
 import isbol from 'wsemi/src/isbol.mjs'
 import isfun from 'wsemi/src/isfun'
 import pmSeries from 'wsemi/src/pmSeries.mjs'

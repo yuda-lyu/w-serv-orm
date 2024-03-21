@@ -1,7 +1,7 @@
 import path from 'path'
 import fs from 'fs'
 import JSON5 from 'json5'
-import get from 'lodash/get'
+import get from 'lodash-es/get'
 import isnum from 'wsemi/src/isnum.mjs'
 import isestr from 'wsemi/src/isestr.mjs'
 
