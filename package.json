@@ -1,16 +1,16 @@
 {
   "name": "w-serv-orm",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "main": "dist/w-serv-orm.umd.js",
   "dependencies": {
     "json5": "^2.2.3",
     "lodash-es": "^4.17.21",
-    "wsemi": "^1.7.47"
+    "wsemi": "^1.7.49"
   },
   "devDependencies": {
-    "w-data-collector": "^1.0.21",
-    "w-orm-mongodb": "^1.1.30",
-    "w-package-tools": "^1.0.73"
+    "w-data-collector": "^1.0.22",
+    "w-orm-mongodb": "^1.1.31",
+    "w-package-tools": "^1.0.75"
   },
   "scripts": {
     "test": "mocha --parallel --timeout 60000 --experimental-modules --es-module-specifier-resolution=node",
