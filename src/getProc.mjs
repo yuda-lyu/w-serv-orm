@@ -59,7 +59,7 @@ async function procOrm(userId, woName, mode, input) {
 
     //check
     if (bCheckUser && !isestr(userId)) {
-        console.log('userId',userId)
+        console.log('userId', userId)
         console.log('找不到使用者主鍵')
         return Promise.reject(`找不到使用者主鍵`)
     }
@@ -80,7 +80,7 @@ async function procOrm(userId, woName, mode, input) {
 
         //check
         if (!oSelf) {
-            console.log('userId',userId)
+            console.log('userId', userId)
             console.log('找不到使用者資訊')
             return Promise.reject(`找不到使用者資訊`)
         }
@@ -99,8 +99,8 @@ async function procOrm(userId, woName, mode, input) {
 
         //check
         if (isActive !== 'y') {
-            console.log('userId',userId)
-            console.log('oSelf',oSelf)
+            console.log('userId', userId)
+            console.log('oSelf', oSelf)
             console.log('使用者被停權或無有效使用者資訊')
             return Promise.reject(`使用者被停權或無有效使用者資訊`)
         }
