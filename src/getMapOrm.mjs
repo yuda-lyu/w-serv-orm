@@ -51,6 +51,20 @@ function adjustData(woName, userId, data, mode = 'save') { //mode: 'insert', 'sa
             })
         }
 
+        //userIdUpdate
+        if (keys.indexOf('userIdUpdate') >= 0) {
+            each(data, (v, k) => {
+                data[k].userIdUpdate = userId
+            })
+        }
+
+        //timeUpdate
+        if (keys.indexOf('timeUpdate') >= 0) {
+            each(data, (v, k) => {
+                data[k].timeUpdate = t
+            })
+        }
+
     }
 
     //userIdUpdate, timeUpdate, 不能用else否則無法同時處理
