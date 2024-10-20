@@ -6,6 +6,7 @@ import nowms2str from 'wsemi/src/nowms2str.mjs'
 import isarr from 'wsemi/src/isarr.mjs'
 import iseobj from 'wsemi/src/iseobj.mjs'
 import isestr from 'wsemi/src/isestr.mjs'
+import clearXSS from 'wsemi/src/clearXSS.mjs'
 
 
 let _ds = null
@@ -84,6 +85,18 @@ function adjustData(woName, userId, data, mode = 'save') { //mode: 'insert', 'sa
             })
         }
 
+    }
+
+    //clearXSS
+    if (true) {
+        data = map(data, (v, k) => {
+            let dt = {}
+            each(v, (vv, kk) => {
+                vv = clearXSS(vv)
+                dt[kk] = vv
+            })
+            return dt
+        })
     }
 
     //復原data型態, 若原本data為物件則取第0個回傳
