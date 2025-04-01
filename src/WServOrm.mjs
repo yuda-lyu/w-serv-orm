@@ -13,9 +13,9 @@ import getProc from './getProc.mjs'
  * @param {String} url 輸入資料庫連線位址字串
  * @param {String} db 輸入資料庫名稱字串
  * @param {Object} [opt={}] 輸入設定物件，預設{}
- * @param {Boolean} [opt.bCheckUser=true] 輸入是否檢查使用者資訊布林值，預設true
- * @param {Function} [opt.getUserById=null] 輸入當bCheckUser=true時依照使用者ID取得使用者資訊物件函數，預設null
- * @param {Boolean} [opt.bExcludeWhenNotAdmin=true] 輸入使用ORM的select方法時是否自動刪除數據內isActive欄位之布林值，預設true
+ * @param {Boolean} [opt.useCheckUser=true] 輸入是否檢查使用者資訊布林值，預設true
+ * @param {Function} [opt.getUserById=null] 輸入當useCheckUser=true時依照使用者ID取得使用者資訊物件函數，預設null
+ * @param {Boolean} [opt.useExcludeWhenNotAdmin=true] 輸入使用ORM的select方法時是否自動刪除數據內isActive欄位之布林值，預設true
  * @returns {Object} 回傳通訊物件，可監聽事件open、error、clientChange、execute、broadcast、deliver，可使用函數broadcast
  * @example
  *
@@ -39,8 +39,8 @@ import getProc from './getProc.mjs'
  * //WServOrm
  * let opt = {
  *     getUserById: null,
- *     bCheckUser: false,
- *     bExcludeWhenNotAdmin: false,
+ *     useCheckUser: false,
+ *     useExcludeWhenNotAdmin: false,
  * }
  * let r = WServOrm(ds, WOrm, url, db, opt)
 console.log(r) //回傳server用orm相關函數

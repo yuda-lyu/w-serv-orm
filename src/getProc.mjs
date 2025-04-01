@@ -15,8 +15,8 @@ let _funPreProcessing = []
 let _funPostProcessing = []
 let _mapOrm = null
 let _getUserById = null
-let bCheckUser = true
-let bExcludeWhenNotAdmin = true
+let useCheckUser = true
+let useExcludeWhenNotAdmin = true
 
 
 function addFunCheck(f) {
@@ -58,7 +58,7 @@ async function procOrm(userId, woName, mode, input) {
     }
 
     //check
-    if (bCheckUser && !isestr(userId)) {
+    if (useCheckUser && !isestr(userId)) {
         console.log('userId', userId)
         console.log('找不到使用者主鍵')
         return Promise.reject(`找不到使用者主鍵`)
@@ -67,8 +67,8 @@ async function procOrm(userId, woName, mode, input) {
     //isAdmin
     let isAdmin = 'n'
 
-    //bCheckUser
-    if (bCheckUser) {
+    //useCheckUser
+    if (useCheckUser) {
 
         //check
         if (!isfun(_getUserById)) {
@@ -122,8 +122,8 @@ async function procOrm(userId, woName, mode, input) {
     //output
     let output = await _mapOrm(userId, woName, mode, input)
 
-    //bExcludeWhenNotAdmin, 非管理者則要過濾掉已刪除之數據
-    if (bExcludeWhenNotAdmin && isAdmin === 'n') {
+    //useExcludeWhenNotAdmin, 非管理者則要過濾掉已刪除之數據
+    if (useExcludeWhenNotAdmin && isAdmin === 'n') {
         if (mode === 'select' && isarr(output)) { //有可能為錯誤物件
             output = filter(output, (v) => {
                 if (haskey(v, 'isActive')) { //針對有isActive屬性
@@ -153,19 +153,19 @@ function getProc(mapOrm, opt = {}) {
     //save _mapOrm
     _mapOrm = mapOrm
 
-    //bCheckUser
-    bCheckUser = get(opt, 'bCheckUser')
-    if (!isbol(bCheckUser)) {
-        bCheckUser = true
+    //useCheckUser
+    useCheckUser = get(opt, 'useCheckUser')
+    if (!isbol(useCheckUser)) {
+        useCheckUser = true
     }
 
-    //save _getUserById, 不事先檢查, 因若bCheckUser=false可允許不給
+    //save _getUserById, 不事先檢查, 因若useCheckUser=false可允許不給
     _getUserById = get(opt, 'getUserById')
 
-    //bExcludeWhenNotAdmin
-    bExcludeWhenNotAdmin = get(opt, 'bExcludeWhenNotAdmin')
-    if (!isbol(bExcludeWhenNotAdmin)) {
-        bExcludeWhenNotAdmin = true
+    //useExcludeWhenNotAdmin
+    useExcludeWhenNotAdmin = get(opt, 'useExcludeWhenNotAdmin')
+    if (!isbol(useExcludeWhenNotAdmin)) {
+        useExcludeWhenNotAdmin = true
     }
 
     return {

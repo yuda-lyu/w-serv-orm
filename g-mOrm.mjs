@@ -19,8 +19,8 @@ let db = st.dbName
 //WServOrm
 let opt = {
     getUserById: null,
-    bCheckUser: false,
-    bExcludeWhenNotAdmin: false,
+    useCheckUser: false,
+    useExcludeWhenNotAdmin: false,
 }
 let r = WServOrm(ds, WOrm, url, db, opt)
 console.log(r) //回傳server用orm相關函數
