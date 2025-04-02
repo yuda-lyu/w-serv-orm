@@ -160,7 +160,7 @@ async function mapOrm(userId, woName, mode, input) {
                 })
         }
         else if (mode === 'save') {
-            r = await wo.save(input, { atomic: true })
+            r = await wo.save(input)
                 .catch((msg) => {
                     console.log(`${woName}.save catch`, msg)
                     err = '儲存資料失敗'

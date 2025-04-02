@@ -9,7 +9,7 @@
   },
   "devDependencies": {
     "w-data-collector": "^1.0.22",
-    "w-orm-mongodb": "^1.1.32",
+    "w-orm-lowdb": "^1.0.0",
     "w-package-tools": "^1.0.85"
   },
   "scripts": {

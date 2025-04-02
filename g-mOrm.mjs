@@ -1,20 +1,23 @@
-import WOrm from 'w-orm-mongodb/src/WOrmMongodb.mjs' //自行選擇引用ORM
+// import WOrm from 'w-orm-mongodb/src/WOrmMongodb.mjs' //自行選擇引用ORM
+import WOrm from 'w-orm-lowdb/src/WOrmLowdb.mjs' //自行選擇引用ORM
 import ds from './schema/index.mjs' //先行建置schema
 import WServOrm from './src/WServOrm.mjs'
 
 
-//st
-let st = {
-    dbUsername: 'username',
-    dbPassword: 'password',
-    dbName: 'wservorm',
-    dbIP: 'localhost',
-    dbPort: 27017,
-}
+// //st
+// let st = {
+//     dbUsername: 'username',
+//     dbPassword: 'password',
+//     dbName: 'wservorm',
+//     dbIP: 'localhost',
+//     dbPort: 27017,
+// }
 
 //url, db
-let url = `mongodb://${st.dbUsername}:${st.dbPassword}@${st.dbIP}:${st.dbPort}`
-let db = st.dbName
+// let url = `mongodb://${st.dbUsername}:${st.dbPassword}@${st.dbIP}:${st.dbPort}`
+// let db = st.dbName
+let url = './db.json'
+let db = 'worm'
 
 //WServOrm
 let opt = {

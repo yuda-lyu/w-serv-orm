@@ -20,29 +20,31 @@ npm i w-serv-orm
 #### Example for server:
 > **Link:** [[dev source code](https://github.com/yuda-lyu/w-serv-orm/blob/master/g-mOrm.mjs)]
 ```alias
-import WOrm from 'w-orm-mongodb/src/WOrmMongodb.mjs' //自行選擇引用ORM
+// import WOrm from 'w-orm-mongodb/src/WOrmMongodb.mjs' //自行選擇引用ORM
+import WOrm from 'w-orm-lowdb/src/WOrmLowdb.mjs' //自行選擇引用ORM
 import ds from './schema/index.mjs' //先行建置schema
 import WServOrm from './src/WServOrm.mjs'
 
-
-//st
-let st = {
-    dbUsername: 'username',
-    dbPassword: 'password',
-    dbName: 'wservorm',
-    dbIP: 'localhost',
-    dbPort: 27017,
-}
+// //st
+// let st = {
+//     dbUsername: 'username',
+//     dbPassword: 'password',
+//     dbName: 'wservorm',
+//     dbIP: 'localhost',
+//     dbPort: 27017,
+// }
 
 //url, db
-let url = `mongodb://${st.dbUsername}:${st.dbPassword}@${st.dbIP}:${st.dbPort}`
-let db = st.dbName
+// let url = `mongodb://${st.dbUsername}:${st.dbPassword}@${st.dbIP}:${st.dbPort}`
+// let db = st.dbName
+let url = './db.json'
+let db = 'worm'
 
 //WServOrm
 let opt = {
     getUserById: null,
-    bCheckUser: false,
-    bExcludeWhenNotAdmin: false,
+    useCheckUser: false,
+    useExcludeWhenNotAdmin: false,
 }
 let r = WServOrm(ds, WOrm, url, db, opt)
 console.log(r) //回傳server用orm相關函數
@@ -71,4 +73,6 @@ console.log(r) //回傳server用orm相關函數
 //   addFunPostProcessing: [Function: addFunPostProcessing],
 //   procOrm: [AsyncFunction: procOrm]
 // }
+
+// export default r
 ```
