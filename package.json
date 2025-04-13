@@ -1,11 +1,11 @@
 {
   "name": "w-serv-orm",
-  "version": "1.0.20",
+  "version": "1.0.21",
   "main": "dist/w-serv-orm.umd.js",
   "dependencies": {
     "json5": "^2.2.3",
     "lodash-es": "^4.17.21",
-    "wsemi": "^1.7.87"
+    "wsemi": "^1.7.88"
   },
   "devDependencies": {
     "w-data-collector": "^1.0.22",
