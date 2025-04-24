@@ -1,11 +1,11 @@
 {
   "name": "w-serv-orm",
-  "version": "1.0.21",
+  "version": "1.0.22",
   "main": "dist/w-serv-orm.umd.js",
   "dependencies": {
     "json5": "^2.2.3",
     "lodash-es": "^4.17.21",
-    "wsemi": "^1.7.88"
+    "wsemi": "^1.7.89"
   },
   "devDependencies": {
     "w-data-collector": "^1.0.22",
@@ -13,7 +13,7 @@
     "w-package-tools": "^1.0.87"
   },
   "scripts": {
-    "test": "mocha --parallel --timeout 60000 --experimental-modules",
+    "test": "mocha --parallel --timeout 60000",
     "deploy": "gh-pages -d docs"
   },
   "repository": {

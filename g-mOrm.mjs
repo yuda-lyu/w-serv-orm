@@ -56,4 +56,4 @@ console.log(r) //回傳server用orm相關函數
 // export default r
 
 
-//node --experimental-modules g-mOrm.mjs
+//node g-mOrm.mjs
