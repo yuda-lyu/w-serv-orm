@@ -30,31 +30,40 @@ function getSettings(opt = {}) {
         //parse
         st = JSON5.parse(j)
 
-        //check
-        if (!isestr(get(st, 'dbType'))) {
-            console.log('invalid st.dbType', st.dbType)
+        //url
+        let url = ''
+        if (isestr(get(st, 'dbUrl'))) {
+            url = st.dbUrl
         }
-        if (!isestr(get(st, 'dbUsername'))) {
-            console.log('invalid st.dbUsername', st.dbUsername)
-        }
-        if (!isestr(get(st, 'dbPassword'))) {
-            console.log('invalid st.dbPassword', st.dbPassword)
-        }
-        if (!isestr(get(st, 'dbIP'))) {
-            console.log('invalid st.dbIP', st.dbIP)
-        }
-        if (!isnum(get(st, 'dbPort'))) {
-            console.log('invalid st.dbPort', st.dbPort)
-        }
-        if (!isestr(get(st, 'dbType'))) {
-            console.log('invalid st.dbType', st.dbType)
-        }
-        if (!isestr(get(st, 'dbName'))) {
-            console.log('invalid st.dbName', st.dbName)
+        else {
+            if (!isestr(get(st, 'dbType'))) {
+                console.log('st', st)
+                throw new Error(`invalid st.dbType`)
+            }
+            if (!isestr(get(st, 'dbUsername'))) {
+                console.log('st', st)
+                throw new Error(`invalid st.dbUsername`)
+            }
+            if (!isestr(get(st, 'dbPassword'))) {
+                console.log('st', st)
+                throw new Error(`invalid st.dbPassword`)
+            }
+            if (!isestr(get(st, 'dbIP'))) {
+                console.log('st', st)
+                throw new Error(`invalid st.dbIP`)
+            }
+            if (!isnum(get(st, 'dbPort'))) {
+                console.log('st', st)
+                throw new Error(`invalid st.dbPort`)
+            }
+            url = `${st.dbType}://${st.dbUsername}:${st.dbPassword}@${st.dbIP}:${st.dbPort}`
         }
 
-        //url, db
-        let url = `${st.dbType}://${st.dbUsername}:${st.dbPassword}@${st.dbIP}:${st.dbPort}`
+        //db
+        if (!isestr(get(st, 'dbName'))) {
+            console.log('st', st)
+            throw new Error(`invalid st.dbName`)
+        }
         let db = st.dbName
 
         //merge
