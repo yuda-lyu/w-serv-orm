@@ -12,6 +12,7 @@ An operator for orm in server.
 To view documentation or get support, visit [docs](https://yuda-lyu.github.io/w-serv-orm/WServOrm.html).
 
 ## Installation
+
 ### Using npm(ES6 module):
 ```alias
 npm i w-serv-orm
