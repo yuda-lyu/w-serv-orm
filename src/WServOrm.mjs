@@ -1,3 +1,5 @@
+import pmSeries from 'wsemi/src/pmSeries.mjs'
+import isfun from 'wsemi/src/isfun.mjs'
 import getDbBackupAndRecover from './getDbBackupAndRecover.mjs'
 import getWoItems from './getWoItems.mjs'
 import getMapOrm from './getMapOrm.mjs'
@@ -67,6 +69,7 @@ import getProc from './getProc.mjs'
  * //       [Symbol(kCapture)]: false
  * //     }
  * //   },
+ * //   closeAll: [AsyncFunction: closeAll],
  * //   addFunCheck: [Function: addFunCheck],
  * //   addFunPreProcessing: [Function: addFunPreProcessing],
  * //   addFunPostProcessing: [Function: addFunPostProcessing],
@@ -90,10 +93,20 @@ function WServOrm(ds, WOrm, url, db, opt = {}) {
     let proc = getProc(mapOrm, opt)
     // console.log('proc', proc)
 
+    //closeAll, 逐一關閉woItems內各資料表ORM實例之連線(env), 釋放檔案鎖, 供測試隔離或優雅關機使用
+    let closeAll = async () => {
+        await pmSeries(woItems, async (wo) => {
+            if (wo && isfun(wo.close)) { //ORM未實作close時(如lowdb)自動略過
+                await wo.close()
+            }
+        })
+    }
+
     return {
         ...getDbBackupAndRecover,
         woItems,
         // mapOrm,
+        closeAll,
         ...proc,
     }
 }
