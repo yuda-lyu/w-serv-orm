@@ -1,14 +1,14 @@
 {
   "name": "w-serv-orm",
-  "version": "1.0.49",
+  "version": "1.0.50",
   "main": "dist/w-serv-orm.umd.js",
   "dependencies": {
     "json5": "^2.2.3",
-    "wsemi": "^1.8.79"
+    "wsemi": "^1.8.80"
   },
   "devDependencies": {
-    "w-data-collector": "^1.0.32",
-    "w-orm-lowdb": "^1.0.20",
+    "w-data-collector": "^1.0.33",
+    "w-orm-lowdb": "^1.0.21",
     "w-package-tools": "^1.1.15"
   },
   "scripts": {
