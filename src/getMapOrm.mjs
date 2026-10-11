@@ -2,15 +2,44 @@ import get from 'lodash-es/get.js'
 import each from 'lodash-es/each.js'
 import map from 'lodash-es/map.js'
 import size from 'lodash-es/size.js'
+import take from 'lodash-es/take.js'
+import join from 'lodash-es/join.js'
 import nowms2str from 'wsemi/src/nowms2str.mjs'
 import isarr from 'wsemi/src/isarr.mjs'
 import iseobj from 'wsemi/src/iseobj.mjs'
 import isestr from 'wsemi/src/isestr.mjs'
+import isnum from 'wsemi/src/isnum.mjs'
 import clearXSS from 'wsemi/src/clearXSS.mjs'
+import getItemsFail from './getItemsFail.mjs'
 
 
 let _ds = null
 let _woItems = null
+
+
+function getMsgFail(msg, fails) {
+    //前端訊息僅列出失敗筆, 錯誤原文另由console.log輸出, 與既有整批錯誤之處理一致
+    //有效主鍵(非空字串或數字)列為id[...], 否則列其於輸入內之位置, 失敗筆數過多時僅列前nShow筆並附總筆數
+
+    //nShow
+    let nShow = 10
+
+    //ss
+    let ss = map(take(fails, nShow), (v) => {
+        if (isestr(v.id) || isnum(v.id)) {
+            return `id[${v.id}]`
+        }
+        return `第${v.k + 1}筆`
+    })
+
+    //c
+    let c = `${msg}: ${join(ss, ', ')}`
+    if (size(fails) > nShow) {
+        c += `等共${size(fails)}筆`
+    }
+
+    return c
+}
 
 
 function adjustData(woName, userId, data, mode = 'save') { //mode: 'insert', 'save', 'insert+save'
@@ -172,6 +201,16 @@ async function mapOrm(userId, woName, mode, input) {
             return Promise.reject(err)
         }
 
+        //check, save單筆失敗時整批仍resolve並以該筆ok為0回報, 須逐筆檢查
+        //insert之錯誤皆屬整批性而reject, 其回傳為聚合物件而非逐筆陣列, 故不須檢查
+        if (mode === 'save') {
+            let fails = getItemsFail(r, input)
+            if (size(fails) > 0) {
+                console.log(`${woName}.save fail`, fails)
+                return Promise.reject(getMsgFail('儲存資料失敗', fails))
+            }
+        }
+
         //僅回傳id避免大量數據時造成負擔
         if (isarr(input)) {
             r = map(input, (v) => {
@@ -192,6 +231,15 @@ async function mapOrm(userId, woName, mode, input) {
                 console.log(`${woName}.del catch`, msg)
                 err = '刪除資料失敗'
             })
+
+        //check, 單筆失敗時整批仍resolve並以該筆ok為0回報, 須逐筆檢查
+        if (!isestr(err)) {
+            let fails = getItemsFail(r, input)
+            if (size(fails) > 0) {
+                console.log(`${woName}.del fail`, fails)
+                err = getMsgFail('刪除資料失敗', fails)
+            }
+        }
 
     }
     else if (mode === 'delAll') {
@@ -214,6 +262,9 @@ async function mapOrm(userId, woName, mode, input) {
         //rt,r
         let rt
         r = [] //default to array
+
+        //msgsFail, 逐筆失敗僅影響該筆, 不中斷後續步驟, 待全部步驟完成後一併reject; 整批性錯誤則仍立即reject
+        let msgsFail = []
 
         let add = get(input, 'add', [])
         if (size(add) > 0) {
@@ -251,7 +302,7 @@ async function mapOrm(userId, woName, mode, input) {
         if (size(del) > 0) {
 
             //del
-            await wo.del(del)
+            let rs = await wo.del(del)
                 .catch((msg) => {
                     console.log(`${woName}.save catch`, msg)
                     err = '刪除資料失敗'
@@ -260,6 +311,13 @@ async function mapOrm(userId, woName, mode, input) {
             //check
             if (isestr(err)) {
                 return Promise.reject(err)
+            }
+
+            //check, 單筆失敗時整批仍resolve並以該筆ok為0回報, 須逐筆檢查
+            let fails = getItemsFail(rs, del)
+            if (size(fails) > 0) {
+                console.log(`${woName}.del fail`, fails)
+                msgsFail.push(getMsgFail('刪除資料失敗', fails))
             }
 
             //r
@@ -283,7 +341,7 @@ async function mapOrm(userId, woName, mode, input) {
             }
 
             //save
-            await wo.save(diff)
+            let rs = await wo.save(diff)
                 .catch((msg) => {
                     console.log(`${woName}.save catch`, msg)
                     err = '變更資料失敗'
@@ -294,11 +352,23 @@ async function mapOrm(userId, woName, mode, input) {
                 return Promise.reject(err)
             }
 
+            //check, 單筆失敗時整批仍resolve並以該筆ok為0回報, 須逐筆檢查
+            let fails = getItemsFail(rs, diff)
+            if (size(fails) > 0) {
+                console.log(`${woName}.save fail`, fails)
+                msgsFail.push(getMsgFail('變更資料失敗', fails))
+            }
+
             //r
             rt = map(diff, (v) => {
                 return { id: v.id } //僅回傳id避免大量數據時造成負擔
             })
             r = [...r, ...rt]
+        }
+
+        //check, 各步驟之逐筆失敗於全部步驟完成後一併reject
+        if (size(msgsFail) > 0) {
+            return Promise.reject(join(msgsFail, '; '))
         }
 
         //console.log('mix r', r)

@@ -9,6 +9,10 @@ import getProc from './getProc.mjs'
 /**
  * 產生伺服器ORM的支援物件
  *
+ * procOrm之save、del與mix，於ORM回傳之逐筆結果有任一筆ok為0(單筆失敗)時reject，訊息列出失敗筆之主鍵(無有效主鍵者列其於輸入內之位置)，錯誤原文另由console.log輸出。
+ * 單筆失敗不中斷整批，故reject時其餘筆數已寫入；save與del皆以主鍵為準，數據帶有主鍵時整批重送不會產生重複資料，未帶主鍵者重送則會由ORM另產生主鍵而重複寫入。
+ * mix之各步驟遇單筆失敗不中斷後續步驟，待全部步驟完成後一併reject；遇整批性錯誤則立即reject，後續步驟不執行。
+ *
  * @class
  * @param {Object} ds 輸入資料表設定物件
  * @param {Object} WOrm 輸入資料庫ORM物件
