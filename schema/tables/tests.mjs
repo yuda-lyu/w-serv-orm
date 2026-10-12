@@ -60,7 +60,7 @@ let funTest = () => {
         v = dtpick(v, keys(settings))
         return v
     })
-    console.log(`已產生: {keyTable} 測試資料`, rs)
+    console.log(`generated test data for table[${keyTable}]`, rs)
     return rs
 }
 

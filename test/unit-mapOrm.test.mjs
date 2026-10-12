@@ -1,6 +1,7 @@
 import assert from 'assert'
 import WServOrm from '../src/WServOrm.mjs'
 import genTestData from '../src/genTestData.mjs'
+import dsSchema from '../schema/index.mjs'
 
 
 //替身ORM, 回傳形狀依w-orm系列規格(資料庫函數回傳定義計算.md T2、T4):
@@ -66,28 +67,28 @@ describe('mapOrm逐筆失敗', function() {
         //R01: 逐筆ok為0即reject, 訊息帶失敗筆之主鍵, 不含成功筆
         plan.save = () => [okSave, { n: 1, nInserted: 0, nModified: 0, ok: 0, err: 'E-save' }]
         let err = await getReject(proc('save', [{ id: 's1' }, { id: 's2' }]))
-        assert.strict.equal(err, '儲存資料失敗: id[s2]')
+        assert.strict.equal(err, 'failed to save data: id[s2]')
     })
 
     it('U04 save物件ok為0', async function() {
         //R01: 輸入為單一物件時ORM回傳長度為1之陣列, 仍須檢出
         plan.save = () => [{ n: 1, nInserted: 0, nModified: 0, ok: 0, err: 'E-save' }]
         let err = await getReject(proc('save', { id: 's1' }))
-        assert.strict.equal(err, '儲存資料失敗: id[s1]')
+        assert.strict.equal(err, 'failed to save data: id[s1]')
     })
 
     it('U05 save未帶主鍵之筆ok為0且無err', async function() {
         //R01: 無有效主鍵者以輸入位置標示; R07: ok為0而無err(舊版ORM)仍判失敗
         plan.save = () => [okSave, { n: 1, ok: 0 }]
         let err = await getReject(proc('save', [{ id: 's1' }, { name: 'no-id' }]))
-        assert.strict.equal(err, '儲存資料失敗: 第2筆')
+        assert.strict.equal(err, 'failed to save data: data[1]')
     })
 
     it('U06 save整批reject', async function() {
         //R05: 整批性錯誤之訊息不變
         plan.save = () => Promise.reject(new Error('E-batch'))
         let err = await getReject(proc('save', [{ id: 's1' }]))
-        assert.strict.equal(err, '儲存資料失敗')
+        assert.strict.equal(err, 'failed to save data')
     })
 
     it('U07 save之ORM回傳非陣列', async function() {
@@ -106,7 +107,7 @@ describe('mapOrm逐筆失敗', function() {
         plan.save = (data) => data.map(() => ({ n: 1, nInserted: 0, nModified: 0, ok: 0, err: 'E-full' }))
         let err = await getReject(proc('save', input))
         let ids = input.slice(0, 10).map((v) => `id[${v.id}]`).join(', ')
-        assert.strict.equal(err, `儲存資料失敗: ${ids}等共12筆`)
+        assert.strict.equal(err, `failed to save data: ${ids}, ... (12 in total)`)
     })
 
     it('U09 del全部成功含主鍵未命中', async function() {
@@ -121,21 +122,21 @@ describe('mapOrm逐筆失敗', function() {
         //R02: del逐筆ok為0即reject; 數字主鍵照列
         plan.del = () => [okDel, { n: 0, nDeleted: 0, ok: 0, err: 'can not delete by invalid id[123]' }]
         let err = await getReject(proc('del', [{ id: 'd1' }, { id: 123 }]))
-        assert.strict.equal(err, '刪除資料失敗: id[123]')
+        assert.strict.equal(err, 'failed to delete data: id[123]')
     })
 
     it('U10b del物件輸入ok為0且無err', async function() {
         //R02: 物件輸入亦須檢出; R07: ok為0而無err仍判失敗
         plan.del = () => [{ n: 1, nDeleted: 0, ok: 0 }]
         let err = await getReject(proc('del', { id: 'd1' }))
-        assert.strict.equal(err, '刪除資料失敗: id[d1]')
+        assert.strict.equal(err, 'failed to delete data: id[d1]')
     })
 
     it('U11 del整批reject', async function() {
         //R05: 整批性錯誤之訊息不變
         plan.del = () => Promise.reject(new Error('E-batch'))
         let err = await getReject(proc('del', [{ id: 'd1' }]))
-        assert.strict.equal(err, '刪除資料失敗')
+        assert.strict.equal(err, 'failed to delete data')
     })
 
     it('U12 del之ORM回傳非陣列', async function() {
@@ -161,7 +162,7 @@ describe('mapOrm逐筆失敗', function() {
         plan.del = () => [okDel, { n: 0, nDeleted: 0, ok: 0, err: 'E-del' }]
         plan.save = () => [{ n: 1, nInserted: 0, nModified: 0, ok: 0, err: 'E-save' }]
         let err = await getReject(proc('mix', { add: [{ id: 'a1' }], del: [{ id: 'd1' }, { id: 'd2' }], diff: [{ id: 'f1' }] }))
-        assert.strict.equal(err, '刪除資料失敗: id[d2]; 變更資料失敗: id[f1]')
+        assert.strict.equal(err, 'failed to delete data: id[d2]; failed to update data: id[f1]')
         assert.strict.deepEqual(calls.map((v) => v.fn), ['insert', 'del', 'save'])
     })
 
@@ -170,7 +171,7 @@ describe('mapOrm逐筆失敗', function() {
         plan.del = () => [{ n: 0, nDeleted: 0, ok: 0, err: 'E-del' }]
         plan.save = (data) => data.map(() => okSave)
         let err = await getReject(proc('mix', { del: [{ id: 'd1' }], diff: [{ id: 'f1' }] }))
-        assert.strict.equal(err, '刪除資料失敗: id[d1]')
+        assert.strict.equal(err, 'failed to delete data: id[d1]')
         assert.strict.deepEqual(calls.map((v) => v.fn), ['del', 'save'])
     })
 
@@ -179,7 +180,7 @@ describe('mapOrm逐筆失敗', function() {
         plan.del = () => Promise.reject(new Error('E-batch'))
         plan.save = (data) => data.map(() => okSave)
         let err = await getReject(proc('mix', { del: [{ id: 'd1' }], diff: [{ id: 'f1' }] }))
-        assert.strict.equal(err, '刪除資料失敗')
+        assert.strict.equal(err, 'failed to delete data')
         assert.strict.deepEqual(calls.map((v) => v.fn), ['del'])
     })
 
@@ -188,7 +189,7 @@ describe('mapOrm逐筆失敗', function() {
         plan.insert = () => Promise.reject(new Error('E-batch'))
         plan.del = (data) => data.map(() => okDel)
         let err = await getReject(proc('mix', { add: [{ id: 'a1' }], del: [{ id: 'd1' }] }))
-        assert.strict.equal(err, '新增資料失敗')
+        assert.strict.equal(err, 'failed to insert data')
         assert.strict.deepEqual(calls.map((v) => v.fn), ['insert'])
     })
 
@@ -197,7 +198,7 @@ describe('mapOrm逐筆失敗', function() {
         plan.del = () => [{ n: 0, nDeleted: 0, ok: 0, err: 'E-del' }]
         plan.save = () => Promise.reject(new Error('E-batch'))
         let err = await getReject(proc('mix', { del: [{ id: 'd1' }], diff: [{ id: 'f1' }] }))
-        assert.strict.equal(err, '變更資料失敗')
+        assert.strict.equal(err, 'failed to update data')
     })
 
     it('U19 insert成功', async function() {
@@ -224,6 +225,88 @@ describe('mapOrm逐筆失敗', function() {
         }
         assert.ok(!String(err).includes('E-secret-detail'))
         assert.ok(JSON.stringify(logs).includes('E-secret-detail'))
+    })
+
+})
+
+
+describe('mapOrm主鍵與clearXSS', function() {
+
+    let so = WServOrm(ds, WOrmStub, 'stub-url', 'stub-db', { useCheckUser: false, useExcludeWhenNotAdmin: false })
+    let proc = (mode, input) => so.procOrm('u1', 'tests', mode, input)
+
+    beforeEach(function() {
+        plan = {}
+        calls = []
+    })
+
+    it('X01 數學式之主鍵與欄位原樣寫入並回傳', async function() {
+        //wsemi 1.9.13起clearXSS只轉義會開始標籤之<, 數學式不改寫, 主鍵不被拒絕且與寫入者一致
+        plan.save = (data) => data.map(() => okSave)
+        let r = await proc('save', [{ id: 'a < b', name: '溫度 > 30°C' }, { id: '1 > 0', name: 'x <= 5' }])
+        assert.strict.deepEqual(r, [{ id: 'a < b' }, { id: '1 > 0' }])
+        assert.strict.deepEqual(calls[0].data.map((v) => [v.id, v.name]), [['a < b', '溫度 > 30°C'], ['1 > 0', 'x <= 5']])
+    })
+
+    it('X02 save之主鍵會被改寫即整批reject且不呼叫ORM', async function() {
+        //改寫後之主鍵與呼叫端所持者不同而查不到, 整批拒絕; 訊息只列位置不回顯主鍵; 結尾之<亦會被轉義
+        plan.save = (data) => data.map(() => okSave)
+        let err = await getReject(proc('save', [{ id: 's1' }, { id: 'a<b' }, { id: 'x <' }]))
+        assert.strict.equal(err, 'failed to save data, id contains HTML markup: data[1], data[2]')
+        assert.strict.deepEqual(calls, [])
+    })
+
+    it('X03 insert物件之主鍵會被改寫即reject且不呼叫ORM', async function() {
+        plan.insert = (data) => ({ n: data.length, nInserted: data.length, ok: 1 })
+        let err = await getReject(proc('insert', { id: '<script>x' }))
+        assert.strict.equal(err, 'failed to insert data, id contains HTML markup: data[0]')
+        assert.strict.deepEqual(calls, [])
+    })
+
+    it('X04 mix之新增或修改之主鍵會被改寫即於任何步驟之前reject', async function() {
+        //mix依add、del、diff執行, 預檢於任何步驟寫入之前, 故一筆都不寫入
+        plan.insert = (data) => ({ n: data.length, nInserted: data.length, ok: 1 })
+        plan.del = (data) => data.map(() => okDel)
+        plan.save = (data) => data.map(() => okSave)
+        let err = await getReject(proc('mix', { add: [{ id: 'a1' }, { id: 'a<b' }], del: [{ id: 'd1' }], diff: [{ id: '</x>' }] }))
+        assert.strict.equal(err, 'failed to insert data, id contains HTML markup: data[1]; failed to update data, id contains HTML markup: data[0]')
+        assert.strict.deepEqual(calls, [])
+        err = await getReject(proc('mix', { del: [{ id: 'd1' }], diff: [{ id: 'f1' }, { id: '<!--x-->' }] }))
+        assert.strict.equal(err, 'failed to update data, id contains HTML markup: data[1]')
+        assert.strict.deepEqual(calls, [])
+    })
+
+    it('X05 數字主鍵、未帶主鍵與不被改寫之主鍵照常寫入', async function() {
+        //判準為是否被改寫: 數字不經清除, 未帶主鍵者由本套件補值, 白名單標籤之規範寫法不被改寫
+        plan.save = (data) => data.map(() => okSave)
+        let r = await proc('save', [{ id: 5 }, { id: '<b>粗體</b>' }, { name: 'no-id' }])
+        assert.strict.equal(r[0].id, 5)
+        assert.strict.equal(r[1].id, '<b>粗體</b>')
+        assert.ok(typeof r[2].id === 'string' && r[2].id.length > 0)
+    })
+
+    it('X06 select與del不經clearXSS, 主鍵原樣交ORM', async function() {
+        //此不對稱即主鍵會被改寫者須於寫入前拒絕之原因
+        plan.select = () => []
+        plan.del = (data) => data.map(() => ({ n: 0, nDeleted: 0, ok: 1 }))
+        await proc('select', { id: 'a<b' })
+        await proc('del', [{ id: 'a<b' }])
+        assert.strict.deepEqual(calls.map((v) => v.data), [{ id: 'a<b' }, [{ id: 'a<b' }]])
+    })
+
+    it('X07 insert與mix各入口之其餘主鍵狀態', async function() {
+        //數字與不被改寫之主鍵照寫, mix之修改未帶主鍵者補值, mix之刪除不經clearXSS而原樣交ORM
+        plan.insert = (data) => ({ n: data.length, nInserted: data.length, ok: 1 })
+        plan.del = (data) => data.map(() => okDel)
+        plan.save = (data) => data.map(() => okSave)
+        let r1 = await proc('insert', [{ id: 7 }, { id: 'a < b' }])
+        assert.strict.deepEqual(r1, [{ id: 7 }, { id: 'a < b' }])
+        let r2 = await proc('mix', { add: [{ id: 8 }, { id: '1 > 0' }], del: [{ id: 'a<b' }], diff: [{ id: 9 }, { id: 'x <= 5' }, { name: 'no-id' }] })
+        assert.strict.deepEqual(r2.slice(0, 5), [{ id: 8 }, { id: '1 > 0' }, { id: 'a<b' }, { id: 9 }, { id: 'x <= 5' }])
+        assert.ok(typeof r2[5].id === 'string' && r2[5].id.length > 0)
+        assert.strict.deepEqual(calls.map((v) => v.fn), ['insert', 'insert', 'del', 'save'])
+        assert.strict.deepEqual(calls[2].data, [{ id: 'a<b' }])
+        assert.strict.equal(calls[3].data[2].id, r2[5].id)
     })
 
 })
@@ -263,6 +346,28 @@ describe('genTestData逐筆失敗', function() {
         assert.ok(String(err).includes('tests'))
         assert.ok(String(err).includes('E-gen'))
         assert.ok(String(err).includes('g2'))
+    })
+
+    it('U23 funTestAndSave與funTest之逐筆失敗訊息相同', async function() {
+        //R09: funTestAndSave由w-data-collector之build產生(schema/index.mjs)且其錯誤原樣轉出; w-data-collector 1.0.46起兩種模式之訊息同為英文同格式
+        let woItems = {
+            tests: {
+                save: async (rs) => rs.map((v, k) => (k === 1 ? { n: 1, nInserted: 0, nModified: 0, ok: 0, err: 'E-gen' } : okSave)),
+            },
+        }
+        let logOrig = console.log
+        console.log = () => {}
+        let errs = []
+        try {
+            for (let mode of ['funTestAndSave', 'funTest']) {
+                errs.push(await getReject(genTestData(dsSchema, woItems, { mode, bLog: false })))
+            }
+        }
+        finally {
+            console.log = logOrig
+        }
+        let msg = 'failed to write test data into table[tests]: [{"k":1,"id":"id-for-tests-2","err":"E-gen"}]'
+        assert.strict.deepEqual(errs.map((e) => e.message), [msg, msg])
     })
 
 })

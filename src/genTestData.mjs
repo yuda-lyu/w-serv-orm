@@ -3,7 +3,7 @@ import size from 'lodash-es/size.js'
 import isbol from 'wsemi/src/isbol.mjs'
 import isfun from 'wsemi/src/isfun.mjs'
 import pmSeries from 'wsemi/src/pmSeries.mjs'
-import getItemsFail from './getItemsFail.mjs'
+import getItemsFail from 'w-data-collector/src/getItemsFail.mjs'
 
 
 async function genTestData(ds, woItems, opt = {}) {
@@ -51,7 +51,7 @@ async function genTestData(ds, woItems, opt = {}) {
             //check, 單筆失敗時整批仍resolve並以該筆ok為0回報, 須逐筆檢查
             let fails = getItemsFail(rss, rs)
             if (size(fails) > 0) {
-                throw new Error(`資料表[${k}]寫入測試資料失敗: ${JSON.stringify(fails)}`)
+                throw new Error(`failed to write test data into table[${k}]: ${JSON.stringify(fails)}`)
             }
 
             if (bLog) {

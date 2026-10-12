@@ -69,6 +69,7 @@ console.log(r) //回傳server用orm相關函數
 //       [Symbol(kCapture)]: false
 //     }
 //   },
+//   closeAll: [AsyncFunction: closeAll],
 //   addFunCheck: [Function: addFunCheck],
 //   addFunPreProcessing: [Function: addFunPreProcessing],
 //   addFunPostProcessing: [Function: addFunPostProcessing],

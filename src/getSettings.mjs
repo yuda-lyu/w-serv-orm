@@ -76,7 +76,7 @@ function getSettings(opt = {}) {
     }
     catch (err) {
         console.log(err)
-        throw new Error('伺服器讀取設定檔失敗')
+        throw new Error('failed to read settings file')
     }
 
     return st
