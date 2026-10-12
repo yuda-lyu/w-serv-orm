@@ -42,12 +42,7 @@ let url = './db.json'
 let db = 'worm'
 
 //WServOrm
-let opt = {
-    getUserById: null,
-    useCheckUser: false,
-    useExcludeWhenNotAdmin: false,
-}
-let r = WServOrm(ds, WOrm, url, db, opt)
+let r = WServOrm(ds, WOrm, url, db)
 console.log(r) //回傳server用orm相關函數
 // => {
 //   backup: [AsyncFunction: backup],

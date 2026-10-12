@@ -4,7 +4,7 @@ import genTestData from '../src/genTestData.mjs'
 import dsSchema from '../schema/index.mjs'
 
 
-//替身ORM, 回傳形狀依w-orm系列規格(資料庫函數回傳定義計算.md T2、T4):
+//替身ORM, 回傳形狀依w-orm系列規格(w-orm系列套件統一規格.md T2、T4):
 //save與del回傳與輸入等長保序之逐筆陣列, 單筆失敗時整批仍resolve, 該筆以ok為0並附err回報; 整批性錯誤則reject
 let plan = {}
 let calls = []

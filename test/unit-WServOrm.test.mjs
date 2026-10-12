@@ -86,37 +86,44 @@ describe('WServOrm實例互不干擾', function() {
         assert.ok(!('timeUpdate' in log[1].data[0]))
     })
 
-    it('I03 各實例之useCheckUser與getUserById互不影響', async function() {
-        //R1: 後建之實例不改變先建者之使用者檢查; 檢查時呼叫該實例自己的getUserById
+    it('I03 已移除之設定給予非預設值即建構拋錯且不建立ORM', async function() {
+        //R3: useCheckUser、getUserById、useExcludeWhenNotAdmin已移除; 給予未給、null、false以外之值即拋錯, 避免使用端以為仍有檢查而無聲失去
+        //拋錯於建立各資料表ORM之前, 否則已開啟之ORM(如lmdb之檔案)無從關閉; 亦不影響既有實例
         let log = []
-        let callsGet = []
         let A = WServOrm(dsAll, mkWOrm('A', log), 'url-a', 'db-a', optOff)
-        let B = WServOrm(dsAll, mkWOrm('B', log), 'url-b', 'db-b', {
-            useCheckUser: true,
-            useExcludeWhenNotAdmin: false,
-            getUserById: async (id) => {
-                callsGet.push(`B:${id}`)
-                return { isAdmin: 'n', isActive: 'y' }
-            },
-        })
-        WServOrm(dsAll, mkWOrm('C', log), 'url-c', 'db-c', optOff)
-        await A.procOrm(null, 'tests', 'select', {})
-        let errB = await getReject(B.procOrm(null, 'tests', 'select', {}))
-        assert.strict.equal(errB, 'invalid userId')
-        await B.procOrm('u9', 'tests', 'select', {})
-        assert.strict.deepEqual(callsGet, ['B:u9'])
-        assert.strict.deepEqual(log.map((v) => v.name), ['A', 'B'])
+        let created = 0
+        let WOrmCount = function() {
+            created++
+            return {}
+        }
+        let bads = [
+            ['useCheckUser', true],
+            ['useCheckUser', 'true'],
+            ['useCheckUser', 1],
+            ['getUserById', async () => ({ isActive: 'y' })],
+            ['getUserById', 'x'],
+            ['useExcludeWhenNotAdmin', true],
+            ['useExcludeWhenNotAdmin', 'n'],
+        ]
+        for (let [k, v] of bads) {
+            assert.throws(() => WServOrm(dsAll, WOrmCount, 'url-x', 'db-x', { [k]: v }), (e) => e instanceof Error && e.message.startsWith(`opt.${k} has been removed, `), `${k}: ${String(v)}`)
+        }
+        assert.strict.equal(created, 0)
+        let r = await A.procOrm('u1', 'tests', 'select', {})
+        assert.strict.deepEqual(r.map((v) => v.id), ['A-r1', 'A-r2'])
     })
 
-    it('I04 各實例之useExcludeWhenNotAdmin互不影響', async function() {
-        //R1: A不過濾, 後建之B濾除isActive為n者(未檢查使用者時isAdmin為n)
-        let log = []
-        let A = WServOrm(dsAll, mkWOrm('A', log), 'url-a', 'db-a', optOff)
-        let B = WServOrm(dsAll, mkWOrm('B', log), 'url-b', 'db-b', { useCheckUser: false, useExcludeWhenNotAdmin: true })
-        let rA = await A.procOrm('u1', 'tests', 'select', {})
-        let rB = await B.procOrm('u1', 'tests', 'select', {})
-        assert.strict.deepEqual(rA.map((v) => v.id), ['A-r1', 'A-r2'])
-        assert.strict.deepEqual(rB.map((v) => v.id), ['B-r2'])
+    it('I04 已移除之設定未給、null或false照常建構, 不檢查使用者亦不過濾', async function() {
+        //R3: 四個使用端現行之設定({useCheckUser:false, getUserById:null, useExcludeWhenNotAdmin:false})升版照常可用
+        //procOrm不做授權: userId不檢查(含空字串、null、undefined), select不依使用者濾除isActive為n者
+        let opts = [undefined, null, {}, { useCheckUser: null }, { useCheckUser: false, getUserById: null, useExcludeWhenNotAdmin: false }]
+        for (let opt of opts) {
+            let X = WServOrm(dsAll, mkWOrm('X', []), 'url-x', 'db-x', opt)
+            for (let userId of ['u1', '', null, undefined]) {
+                let r = await X.procOrm(userId, 'tests', 'select', {})
+                assert.strict.deepEqual(r.map((v) => v.id), ['X-r1', 'X-r2'], `opt ${JSON.stringify(opt)}, userId ${String(userId)}`)
+            }
+        }
     })
 
     it('I05 三種hook各自屬於所註冊之實例', async function() {
@@ -178,39 +185,45 @@ describe('WServOrm實例互不干擾', function() {
         assert.strict.deepEqual(log, ['W1', 'W2'])
     })
 
-    it('I08 選項缺省、null、非布林皆視為true', async function() {
-        //R3: useCheckUser與useExcludeWhenNotAdmin之isbol語義
-        let log = []
-        for (let opt of [{}, { useCheckUser: null }, { useCheckUser: 'n' }]) {
-            let X = WServOrm(dsAll, mkWOrm('X', log), 'url-x', 'db-x', opt)
-            let err = await getReject(X.procOrm(null, 'tests', 'select', {}))
-            assert.strict.equal(err, 'invalid userId')
-        }
-        for (let opt of [{ useCheckUser: false }, { useCheckUser: false, useExcludeWhenNotAdmin: null }, { useCheckUser: false, useExcludeWhenNotAdmin: 'n' }]) {
-            let X = WServOrm(dsAll, mkWOrm('X', log), 'url-x', 'db-x', opt)
-            let r = await X.procOrm('u1', 'tests', 'select', {})
-            assert.strict.deepEqual(r.map((v) => v.id), ['X-r2'])
-        }
+    it('I08 擴充函數之參數不含isAdmin', async function() {
+        //R3: 隨useCheckUser移除, 參數物件只含woName、userId、mode、input, 後處理另含output
+        let A = WServOrm(dsAll, mkWOrm('A', []), 'url-a', 'db-a', optOff)
+        let ks = {}
+        A.addFunCheck((p) => {
+            ks.check = Object.keys(p)
+        })
+        A.addFunPreProcessing((p) => {
+            ks.pre = Object.keys(p)
+            return p
+        })
+        A.addFunPostProcessing((p) => {
+            ks.post = Object.keys(p)
+            return p.output
+        })
+        await wait(20)
+        await A.procOrm('u1', 'tests', 'select', {})
+        assert.strict.deepEqual(ks, {
+            check: ['woName', 'userId', 'mode', 'input'],
+            pre: ['woName', 'userId', 'mode', 'input'],
+            post: ['woName', 'userId', 'mode', 'input', 'output'],
+        })
     })
 
     it('I09 呼叫進行中建立另一實例不影響該次呼叫', async function() {
-        //R1a: A於getUserById等待中建立B, A之呼叫仍打A之ORM並套A之過濾設定
+        //R1a: A之check等待中建立B, A之呼叫仍打A之ORM
         let log = []
         let release = null
         let gate = new Promise((resolve) => {
             release = resolve
         })
-        let A = WServOrm(dsAll, mkWOrm('A', log), 'url-a', 'db-a', {
-            useCheckUser: true,
-            useExcludeWhenNotAdmin: false,
-            getUserById: async () => {
-                await gate
-                return { isAdmin: 'n', isActive: 'y' }
-            },
+        let A = WServOrm(dsAll, mkWOrm('A', log), 'url-a', 'db-a', optOff)
+        A.addFunCheck(async () => {
+            await gate
         })
+        await wait(20)
         let pA = A.procOrm('u1', 'tests', 'select', {})
         await wait(5)
-        WServOrm(dsAll, mkWOrm('B', log), 'url-b', 'db-b', { useCheckUser: false, useExcludeWhenNotAdmin: true })
+        WServOrm(dsAll, mkWOrm('B', log), 'url-b', 'db-b', optOff)
         release()
         let rA = await pA
         assert.strict.deepEqual(log.map((v) => v.name), ['A'])
