@@ -1,7 +1,8 @@
 import assert from 'assert'
 import WServOrm from '../src/WServOrm.mjs'
 import getMapOrm from '../src/getMapOrm.mjs'
-import getItemsFailWdc from 'w-data-collector/src/getItemsFail.mjs'
+import getProc from '../src/getProc.mjs'
+import checkOptRemoved from '../src/checkOptRemoved.mjs'
 
 
 //替身ORM工廠: 以name辨識所屬實例, 呼叫紀錄寫入log; 回傳形狀依w-orm系列規格(save、del回逐筆陣列, insert回聚合物件)
@@ -29,7 +30,6 @@ function mkWOrm(name, log, behavior = {}) {
 
 let dsAll = { tests: { keys: ['id', 'name', 'isActive', 'timeUpdate'] } }
 let dsNoTime = { tests: { keys: ['id', 'name', 'isActive'] } }
-let optOff = { useCheckUser: false, useExcludeWhenNotAdmin: false }
 let wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 async function getReject(pm) {
@@ -63,8 +63,8 @@ describe('WServOrm實例互不干擾', function() {
     it('I01 兩實例之procOrm各自路由至自己的ORM', async function() {
         //R1: 雙向皆打自己的ORM, 解構後呼叫亦然
         let log = []
-        let A = WServOrm(dsAll, mkWOrm('A', log), 'url-a', 'db-a', optOff)
-        let B = WServOrm(dsAll, mkWOrm('B', log), 'url-b', 'db-b', optOff)
+        let A = WServOrm(dsAll, mkWOrm('A', log), 'url-a', 'db-a')
+        let B = WServOrm(dsAll, mkWOrm('B', log), 'url-b', 'db-b')
         let { procOrm: pA } = A
         let { procOrm: pB } = B
         await pA('u1', 'tests', 'select', {})
@@ -77,8 +77,8 @@ describe('WServOrm實例互不干擾', function() {
     it('I02 各實例依自己之ds調整數據', async function() {
         //R1: A之ds含timeUpdate而補值, B之ds不含而不補
         let log = []
-        let A = WServOrm(dsAll, mkWOrm('A', log), 'url-a', 'db-a', optOff)
-        let B = WServOrm(dsNoTime, mkWOrm('B', log), 'url-b', 'db-b', optOff)
+        let A = WServOrm(dsAll, mkWOrm('A', log), 'url-a', 'db-a')
+        let B = WServOrm(dsNoTime, mkWOrm('B', log), 'url-b', 'db-b')
         await A.procOrm('u1', 'tests', 'save', [{ id: 'x' }])
         await B.procOrm('u1', 'tests', 'save', [{ id: 'y' }])
         assert.strict.deepEqual(log.map((v) => v.name), ['A', 'B'])
@@ -90,7 +90,7 @@ describe('WServOrm實例互不干擾', function() {
         //R3: useCheckUser、getUserById、useExcludeWhenNotAdmin已移除; 給予未給、null、false以外之值即拋錯, 避免使用端以為仍有檢查而無聲失去
         //拋錯於建立各資料表ORM之前, 否則已開啟之ORM(如lmdb之檔案)無從關閉; 亦不影響既有實例
         let log = []
-        let A = WServOrm(dsAll, mkWOrm('A', log), 'url-a', 'db-a', optOff)
+        let A = WServOrm(dsAll, mkWOrm('A', log), 'url-a', 'db-a')
         let created = 0
         let WOrmCount = function() {
             created++
@@ -130,8 +130,8 @@ describe('WServOrm實例互不干擾', function() {
         //R1、R4: 雙向隔離; 註冊並等待超過1ms後生效
         let log = []
         let calls = []
-        let A = WServOrm(dsAll, mkWOrm('A', log), 'url-a', 'db-a', optOff)
-        let B = WServOrm(dsAll, mkWOrm('B', log), 'url-b', 'db-b', optOff)
+        let A = WServOrm(dsAll, mkWOrm('A', log), 'url-a', 'db-a')
+        let B = WServOrm(dsAll, mkWOrm('B', log), 'url-b', 'db-b')
         for (let [name, ins] of [['A', A], ['B', B]]) {
             ins.addFunCheck(() => {
                 calls.push(`${name}-check`)
@@ -157,12 +157,12 @@ describe('WServOrm實例互不干擾', function() {
         //R1d: A註冊後再建C, C之procOrm不呼叫A之hook
         let log = []
         let calls = []
-        let A = WServOrm(dsAll, mkWOrm('A', log), 'url-a', 'db-a', optOff)
+        let A = WServOrm(dsAll, mkWOrm('A', log), 'url-a', 'db-a')
         A.addFunCheck(() => {
             calls.push('A-check')
         })
         await wait(20)
-        let C = WServOrm(dsAll, mkWOrm('C', log), 'url-c', 'db-c', optOff)
+        let C = WServOrm(dsAll, mkWOrm('C', log), 'url-c', 'db-c')
         await C.procOrm('u1', 'tests', 'select', {})
         assert.strict.deepEqual(calls, [])
     })
@@ -187,7 +187,7 @@ describe('WServOrm實例互不干擾', function() {
 
     it('I08 擴充函數之參數不含isAdmin', async function() {
         //R3: 隨useCheckUser移除, 參數物件只含woName、userId、mode、input, 後處理另含output
-        let A = WServOrm(dsAll, mkWOrm('A', []), 'url-a', 'db-a', optOff)
+        let A = WServOrm(dsAll, mkWOrm('A', []), 'url-a', 'db-a')
         let ks = {}
         A.addFunCheck((p) => {
             ks.check = Object.keys(p)
@@ -216,14 +216,14 @@ describe('WServOrm實例互不干擾', function() {
         let gate = new Promise((resolve) => {
             release = resolve
         })
-        let A = WServOrm(dsAll, mkWOrm('A', log), 'url-a', 'db-a', optOff)
+        let A = WServOrm(dsAll, mkWOrm('A', log), 'url-a', 'db-a')
         A.addFunCheck(async () => {
             await gate
         })
         await wait(20)
         let pA = A.procOrm('u1', 'tests', 'select', {})
         await wait(5)
-        WServOrm(dsAll, mkWOrm('B', log), 'url-b', 'db-b', optOff)
+        WServOrm(dsAll, mkWOrm('B', log), 'url-b', 'db-b')
         release()
         let rA = await pA
         assert.strict.deepEqual(log.map((v) => v.name), ['A'])
@@ -233,8 +233,8 @@ describe('WServOrm實例互不干擾', function() {
     it('I10 同一實例之woItems直寫與procOrm寫入打同一個ORM', async function() {
         //R1b: 使用端先以woItems直接寫入再經procOrm寫入之用法
         let log = []
-        let A = WServOrm(dsAll, mkWOrm('A', log), 'url-a', 'db-a', optOff)
-        WServOrm(dsAll, mkWOrm('B', log), 'url-b', 'db-b', optOff)
+        let A = WServOrm(dsAll, mkWOrm('A', log), 'url-a', 'db-a')
+        WServOrm(dsAll, mkWOrm('B', log), 'url-b', 'db-b')
         await A.woItems.tests.save([{ id: 'x' }])
         await A.procOrm('u1', 'tests', 'save', [{ id: 'y' }])
         assert.strict.deepEqual(log.map((v) => v.name), ['A', 'A'])
@@ -242,12 +242,61 @@ describe('WServOrm實例互不干擾', function() {
 
     it('I11 回傳函數之名稱與型別不變', async function() {
         //R2: 使用端以解構取用並當裸函數傳遞; addFun*回傳undefined; procOrm為async函數
-        let A = WServOrm(dsAll, mkWOrm('A', []), 'url-a', 'db-a', optOff)
+        let A = WServOrm(dsAll, mkWOrm('A', []), 'url-a', 'db-a')
         assert.strict.equal(A.procOrm.name, 'procOrm')
         assert.strict.equal(Object.prototype.toString.call(A.procOrm), '[object AsyncFunction]')
         for (let k of ['addFunCheck', 'addFunPreProcessing', 'addFunPostProcessing']) {
             assert.strict.equal(A[k].name, k)
             assert.strict.equal(A[k](() => {}), undefined)
+        }
+    })
+
+    it('I12 直接呼叫getProc: 已移除之設定與無效之mapOrm皆拋Error, 未給、null或false照常', async function() {
+        //R3: 使用端有以getMapOrm與getProc直接組出procOrm者(如w-web-sso之測試), 已移除之設定不得被靜默忽略, 訊息同WServOrm
+        //建構期錯誤為Error, 不回rejected Promise(原回之Promise被解構時得undefined)
+        let getThrow = (fn) => {
+            try {
+                fn()
+            }
+            catch (e) {
+                return e
+            }
+            throw new Error('預期拋錯但未拋')
+        }
+        let mapOrm = getMapOrm(dsAll, { tests: { select: async () => [{ id: 'r1' }] } })
+        let bads = [
+            ['useCheckUser', true],
+            ['getUserById', async () => ({ isActive: 'y' })],
+            ['useExcludeWhenNotAdmin', true],
+        ]
+        for (let [k, v] of bads) {
+            let e1 = getThrow(() => getProc(mapOrm, { [k]: v }))
+            let e2 = getThrow(() => WServOrm(dsAll, mkWOrm('X', []), 'url-x', 'db-x', { [k]: v }))
+            assert.ok(e1 instanceof Error && e1.message.startsWith(`opt.${k} has been removed, `), `${k}: ${String(v)}`)
+            assert.strict.equal(e1.message, e2.message)
+        }
+        for (let bad of [undefined, null, {}, 'x']) {
+            let e = getThrow(() => getProc(bad))
+            assert.ok(e instanceof Error, String(bad))
+            assert.strict.equal(e.message, 'invalid mapOrm')
+        }
+        for (let args of [[], [undefined], [null], [{}], [{ useCheckUser: false, getUserById: null, useExcludeWhenNotAdmin: false }]]) {
+            let { procOrm } = getProc(mapOrm, ...args)
+            let r = await procOrm('u1', 'tests', 'select', {})
+            assert.strict.deepEqual(r, [{ id: 'r1' }], JSON.stringify(args))
+        }
+    })
+
+    it('I13 checkOptRemoved可由使用端單獨呼叫: 只看已移除之三鍵, 其他鍵不受影響', async function() {
+        //R3: 使用端包裝層(如WWebApi)以自身之opt呼叫, opt含serverPort等其他鍵; 通過時回undefined且不改動opt
+        let optWrap = { serverPort: 11005, webName: { eng: 'x' }, useCheckUser: false, getUserById: null }
+        assert.strict.equal(checkOptRemoved(optWrap), undefined)
+        assert.strict.deepEqual(optWrap, { serverPort: 11005, webName: { eng: 'x' }, useCheckUser: false, getUserById: null })
+        for (let opt of [undefined, null, {}, 'x', 1]) {
+            assert.strict.equal(checkOptRemoved(opt), undefined, String(opt))
+        }
+        for (let k of ['useCheckUser', 'getUserById', 'useExcludeWhenNotAdmin']) {
+            assert.throws(() => checkOptRemoved({ serverPort: 11005, [k]: true }), (e) => e instanceof Error && e.message.startsWith(`opt.${k} has been removed, `), k)
         }
     })
 
@@ -261,7 +310,7 @@ describe('procOrm後處理', function() {
         let log = []
         let calls = []
         let save = (d) => d.map((v, k) => (k === 1 ? { n: 1, ok: 0, err: 'E' } : { n: 1, ok: 1 }))
-        let A = WServOrm(dsAll, mkWOrm('A', log, { save }), 'url-a', 'db-a', optOff)
+        let A = WServOrm(dsAll, mkWOrm('A', log, { save }), 'url-a', 'db-a')
         A.addFunPostProcessing((p) => {
             calls.push(p.mode)
             return p.output
@@ -283,7 +332,7 @@ describe('mapOrm之log標籤與訊息', function() {
         //R6: 標籤依實際操作, reject訊息為該操作之整批失敗訊息
         let log = []
         let fail = () => Promise.reject(new Error('E-batch'))
-        let A = WServOrm(dsAll, mkWOrm('A', log, { insert: fail, del: fail }), 'url-a', 'db-a', optOff)
+        let A = WServOrm(dsAll, mkWOrm('A', log, { insert: fail, del: fail }), 'url-a', 'db-a')
         let errs = []
         let logs = await captureLog(async () => {
             errs.push(await getReject(A.procOrm('u1', 'tests', 'insert', [{ id: 'a' }])))
@@ -297,7 +346,7 @@ describe('mapOrm之log標籤與訊息', function() {
     it('L02 adjustData失敗之標籤含表名', async function() {
         //R6: save、mix之add與diff三處adjustData失敗皆記表名, reject訊息為整批失敗訊息
         let log = []
-        let A = WServOrm({ tests: {} }, mkWOrm('A', log), 'url-a', 'db-a', optOff)
+        let A = WServOrm({ tests: {} }, mkWOrm('A', log), 'url-a', 'db-a')
         let errs = []
         let logs = await captureLog(async () => {
             errs.push(await getReject(A.procOrm('u1', 'tests', 'save', [{ id: 'a' }])))
@@ -313,7 +362,7 @@ describe('mapOrm之log標籤與訊息', function() {
         let id150 = 'k'.repeat(150)
         let id100 = 'm'.repeat(100)
         let save = (d) => d.map(() => ({ n: 1, ok: 0, err: 'E' }))
-        let A = WServOrm(dsAll, mkWOrm('A', [], { save }), 'url-a', 'db-a', optOff)
+        let A = WServOrm(dsAll, mkWOrm('A', [], { save }), 'url-a', 'db-a')
         let err1 = null
         let err2 = null
         let logs = await captureLog(async () => {
@@ -335,7 +384,7 @@ describe('procOrm補主鍵', function() {
     it('P01 insert、save、mix之新增未帶主鍵時補值並回傳', async function() {
         //D1: 本套件以genIDSeq補值, 回傳之id即ORM收到之id; 物件輸入回傳單一{id}
         let log = []
-        let A = WServOrm(dsAll, mkWOrm('A', log), 'url-a', 'db-a', optOff)
+        let A = WServOrm(dsAll, mkWOrm('A', log), 'url-a', 'db-a')
         let r1 = await A.procOrm('u1', 'tests', 'insert', [{ name: 'a' }])
         let r2 = await A.procOrm('u1', 'tests', 'save', { name: 'b' })
         let r3 = await A.procOrm('u1', 'tests', 'mix', { add: [{ name: 'c' }] })
@@ -348,7 +397,7 @@ describe('procOrm補主鍵', function() {
     it('P02 依主鍵值決定是否補值', async function() {
         //D1: null、空字串、物件補值; 數字與非空字串保留(reladb、mdb視數字為有效主鍵)
         let log = []
-        let A = WServOrm(dsAll, mkWOrm('A', log), 'url-a', 'db-a', optOff)
+        let A = WServOrm(dsAll, mkWOrm('A', log), 'url-a', 'db-a')
         let input = [{ id: null }, { id: '' }, { id: { x: 1 } }, { id: 123 }, { id: 'keep' }]
         let r = await A.procOrm('u1', 'tests', 'save', input)
         let got = log[0].data.map((v) => v.id)
@@ -370,7 +419,7 @@ describe('procOrm補主鍵', function() {
         ]
         for (let [ds, expectGen] of dsCases) {
             log.length = 0
-            let A = WServOrm(ds, mkWOrm('A', log), 'url-a', 'db-a', optOff)
+            let A = WServOrm(ds, mkWOrm('A', log), 'url-a', 'db-a')
             await A.procOrm('u1', 'tests', 'insert', [{ name: 'a' }])
             assert.strict.equal(isId(log[0].data[0].id), expectGen, JSON.stringify(ds))
         }
@@ -379,7 +428,7 @@ describe('procOrm補主鍵', function() {
     it('P04 單一空物件維持原樣交ORM', async function() {
         //D1: 調整後無欄位之列不補, 保留ORM視空物件為無效輸入之既有行為
         let log = []
-        let A = WServOrm({ tests: { keys: ['id', 'name'] } }, mkWOrm('A', log), 'url-a', 'db-a', optOff)
+        let A = WServOrm({ tests: { keys: ['id', 'name'] } }, mkWOrm('A', log), 'url-a', 'db-a')
         await A.procOrm('u1', 'tests', 'save', {})
         assert.strict.deepEqual(log[0].data, {})
     })
@@ -387,7 +436,7 @@ describe('procOrm補主鍵', function() {
     it('P05 同批多筆各自補值且呼叫端原物件不被加上主鍵', async function() {
         //D1、D1a: 各自唯一; 補值寫在複本, 呼叫端原物件不含補出之主鍵
         let log = []
-        let A = WServOrm(dsAll, mkWOrm('A', log), 'url-a', 'db-a', optOff)
+        let A = WServOrm(dsAll, mkWOrm('A', log), 'url-a', 'db-a')
         let input = [{ name: 'a' }, { name: 'b' }, { name: 'c' }]
         let r = await A.procOrm('u1', 'tests', 'insert', input)
         let ids = r.map((v) => v.id)
@@ -399,7 +448,7 @@ describe('procOrm補主鍵', function() {
         //X2: 呼叫端未帶主鍵者仍列第N筆, log保留補出之主鍵
         let log = []
         let save = (d) => d.map((v, k) => (k === 1 ? { n: 1, ok: 0, err: 'E' } : { n: 1, ok: 1 }))
-        let A = WServOrm(dsAll, mkWOrm('A', log, { save }), 'url-a', 'db-a', optOff)
+        let A = WServOrm(dsAll, mkWOrm('A', log, { save }), 'url-a', 'db-a')
         let err = null
         let logs = await captureLog(async () => {
             err = await getReject(A.procOrm('u1', 'tests', 'save', [{ id: 's1' }, { name: 'no-id' }]))
@@ -418,7 +467,7 @@ describe('hook串接與註冊', function() {
     it('K01 多個模組各註冊一個後處理皆正確', async function() {
         //D3: 每個後處理皆收參數物件, output為前一個之回傳值
         let log = []
-        let A = WServOrm(dsTwo, mkWOrm('A', log), 'url-a', 'db-a', optOff)
+        let A = WServOrm(dsTwo, mkWOrm('A', log), 'url-a', 'db-a')
         A.addFunPostProcessing(({ woName, output }) => (woName !== 'users' ? output : output.map((v) => ({ ...v, tagA: 1 }))))
         A.addFunPostProcessing(({ woName, output }) => (woName !== 'items' ? output : output.map((v) => ({ ...v, tagB: 1 }))))
         await wait(20)
@@ -431,7 +480,7 @@ describe('hook串接與註冊', function() {
     it('K02 後處理回傳undefined往下傳且拋錯即中止', async function() {
         //D3: 不加特例; 某個拋錯則procOrm reject且後續不執行
         let calls = []
-        let A = WServOrm(dsAll, mkWOrm('A', []), 'url-a', 'db-a', optOff)
+        let A = WServOrm(dsAll, mkWOrm('A', []), 'url-a', 'db-a')
         A.addFunPostProcessing(() => undefined)
         A.addFunPostProcessing((p) => {
             calls.push(p.output)
@@ -441,7 +490,7 @@ describe('hook串接與註冊', function() {
         let r = await A.procOrm('u1', 'tests', 'select', {})
         assert.strict.equal(r, undefined)
         assert.strict.deepEqual(calls, [undefined])
-        let B = WServOrm(dsAll, mkWOrm('B', []), 'url-b', 'db-b', optOff)
+        let B = WServOrm(dsAll, mkWOrm('B', []), 'url-b', 'db-b')
         let after = []
         B.addFunPostProcessing(() => {
             throw new Error('E-post')
@@ -460,7 +509,7 @@ describe('hook串接與註冊', function() {
         //P3-3: 前一個只回{input}時, 下一個仍收得到woName
         let log = []
         let seen = []
-        let A = WServOrm(dsTwo, mkWOrm('A', log), 'url-a', 'db-a', optOff)
+        let A = WServOrm(dsTwo, mkWOrm('A', log), 'url-a', 'db-a')
         A.addFunPreProcessing((p) => ({ input: p.input.map((v) => ({ ...v, preA: 1 })) }))
         A.addFunPreProcessing((p) => {
             seen.push(p.woName)
@@ -477,7 +526,7 @@ describe('hook串接與註冊', function() {
         //P3-3: 防止input成為undefined而令select回全表
         for (let bad of [undefined, [1], { woName: 'tests' }]) {
             let log = []
-            let A = WServOrm(dsAll, mkWOrm('A', log), 'url-a', 'db-a', optOff)
+            let A = WServOrm(dsAll, mkWOrm('A', log), 'url-a', 'db-a')
             A.addFunPreProcessing(() => bad)
             await wait(20)
             let err = await getReject(A.procOrm('u1', 'tests', 'select', {}))
@@ -493,7 +542,7 @@ describe('hook串接與註冊', function() {
             release = resolve
         })
         let calls = []
-        let A = WServOrm(dsAll, mkWOrm('A', []), 'url-a', 'db-a', optOff)
+        let A = WServOrm(dsAll, mkWOrm('A', []), 'url-a', 'db-a')
         A.addFunPostProcessing(async (p) => {
             calls.push('h1')
             await gate
@@ -516,13 +565,13 @@ describe('hook串接與註冊', function() {
 
     it('K06 註冊非函數即同步拋錯, 函數與async函數可註冊', async function() {
         //D4: 訊息含hook名稱; 合法註冊之實例另建(A之check已因非函數註冊而被守門, 見K07)
-        let A = WServOrm(dsAll, mkWOrm('A', []), 'url-a', 'db-a', optOff)
+        let A = WServOrm(dsAll, mkWOrm('A', []), 'url-a', 'db-a')
         for (let k of ['addFunCheck', 'addFunPreProcessing', 'addFunPostProcessing']) {
             for (let bad of [undefined, null, 'x', {}]) {
                 assert.throws(() => A[k](bad), (e) => e instanceof Error && e.message.includes(k))
             }
         }
-        let B = WServOrm(dsAll, mkWOrm('B', []), 'url-b', 'db-b', optOff)
+        let B = WServOrm(dsAll, mkWOrm('B', []), 'url-b', 'db-b')
         for (let k of ['addFunCheck', 'addFunPreProcessing', 'addFunPostProcessing']) {
             B[k](function(p) {
                 return k === 'addFunCheck' ? undefined : (k === 'addFunPreProcessing' ? p : p.output)
@@ -536,7 +585,7 @@ describe('hook串接與註冊', function() {
 
     it('K07 check註冊失敗被吞掉仍擋下呼叫, 前後處理則不影響', async function() {
         //P3-4: check維持fail-closed; 前後處理註冊失敗時陣列不變
-        let A = WServOrm(dsAll, mkWOrm('A', []), 'url-a', 'db-a', optOff)
+        let A = WServOrm(dsAll, mkWOrm('A', []), 'url-a', 'db-a')
         try {
             A.addFunCheck(null)
         }
@@ -546,7 +595,7 @@ describe('hook串接與註冊', function() {
         assert.ok(String(err).includes('addFunCheck'))
         //錯誤型別: 守門於procOrm內reject, 與procOrm其餘拒絕一致為字串
         assert.strict.equal(typeof err, 'string')
-        let B = WServOrm(dsAll, mkWOrm('B', []), 'url-b', 'db-b', optOff)
+        let B = WServOrm(dsAll, mkWOrm('B', []), 'url-b', 'db-b')
         for (let k of ['addFunPreProcessing', 'addFunPostProcessing']) {
             try {
                 B[k](null)
@@ -556,12 +605,6 @@ describe('hook串接與註冊', function() {
         await wait(20)
         let r = await B.procOrm('u1', 'tests', 'select', {})
         assert.strict.equal(r.length, 2)
-    })
-
-    it('K08 src/getItemsFail.mjs相容檔轉出w-data-collector之版本', async function() {
-        //X1: 使用端以深層路徑引用(如w-web-sso server/ormWrite.mjs)
-        let m = await import('../src/getItemsFail.mjs')
-        assert.strict.equal(m.default, getItemsFailWdc)
     })
 
 })

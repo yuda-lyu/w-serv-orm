@@ -27,7 +27,7 @@ describe('procOrm接w-orm-lowdb', function() {
     before(function() {
         fs.rmSync(fd, { recursive: true, force: true })
         fs.mkdirSync(fd, { recursive: true })
-        so = WServOrm(ds, WOrm, `${fd}/db.json`, 'worm', { useCheckUser: false, useExcludeWhenNotAdmin: false })
+        so = WServOrm(ds, WOrm, `${fd}/db.json`, 'worm')
     })
 
     after(async function() {

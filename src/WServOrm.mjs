@@ -1,29 +1,10 @@
-import get from 'lodash-es/get.js'
 import pmSeries from 'wsemi/src/pmSeries.mjs'
 import isfun from 'wsemi/src/isfun.mjs'
+import checkOptRemoved from './checkOptRemoved.mjs'
 import getDbBackupAndRecover from './getDbBackupAndRecover.mjs'
 import getWoItems from './getWoItems.mjs'
 import getMapOrm from './getMapOrm.mjs'
 import getProc from './getProc.mjs'
-
-
-function checkOptRemoved(opt) {
-    //已移除之設定: 未給、null或false者接受(使用端現行之設定), 其餘值拋錯, 避免使用端以為仍有檢查而無聲失去
-    //useCheckUser只查使用者存在且有效, 屬認證而非授權, 卻曾被當成授權; procOrm不做授權, 須由procOrm開放給前端之處負責
-    //useExcludeWhenNotAdmin依賴只有useCheckUser才產生之isAdmin, 未開useCheckUser時會把所有人當非管理者過濾, 一併移除
-    let msgAuth = 'procOrm does not authorize users, authorize where procOrm is exposed to clients'
-    let ks = [
-        ['useCheckUser', msgAuth],
-        ['getUserById', msgAuth],
-        ['useExcludeWhenNotAdmin', 'procOrm does not filter select results by user, use addFunPostProcessing if needed'],
-    ]
-    for (let [k, hint] of ks) {
-        let v = get(opt, k)
-        if (v !== undefined && v !== null && v !== false) {
-            throw new Error(`opt.${k} has been removed, ${hint}`)
-        }
-    }
-}
 
 
 /**
@@ -114,7 +95,7 @@ function checkOptRemoved(opt) {
  */
 function WServOrm(ds, WOrm, url, db, opt = {}) {
 
-    //checkOptRemoved, 須於建立各資料表ORM之前, 否則拋錯時已開啟之ORM(如lmdb之檔案)無從關閉
+    //checkOptRemoved, 須於建立各資料表ORM之前, 否則拋錯時已開啟之ORM(如lmdb之檔案)無從關閉; getProc收到opt時會再檢查一次, 無副作用
     checkOptRemoved(opt)
 
     //getWoItems
@@ -126,7 +107,7 @@ function WServOrm(ds, WOrm, url, db, opt = {}) {
     // console.log('mapOrm', mapOrm)
 
     //getProc
-    let proc = getProc(mapOrm)
+    let proc = getProc(mapOrm, opt)
     // console.log('proc', proc)
 
     //closeAll, 逐一關閉woItems內各資料表ORM實例之連線(env), 釋放檔案鎖, 供測試隔離或優雅關機使用

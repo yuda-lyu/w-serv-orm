@@ -1,6 +1,7 @@
 import iseobj from 'wsemi/src/iseobj.mjs'
 import pmSeries from 'wsemi/src/pmSeries.mjs'
 import isfun from 'wsemi/src/isfun.mjs'
+import checkOptRemoved from './checkOptRemoved.mjs'
 
 
 function addFun(fs, f, name, useGuard = false) {
@@ -30,11 +31,7 @@ function addFun(fs, f, name, useGuard = false) {
 async function procOrm(st, userId, woName, mode, input) {
     //封裝mapOrm, 依序執行擴充檢查、前處理、ORM操作與後處理, st為該實例之狀態
     //不做授權: 不檢查使用者亦不依使用者過濾數據, userId只供寫入稽核欄位與交給擴充函數; 開放給前端時須由開放處負責授權
-
-    //check
-    if (!isfun(st.mapOrm)) {
-        return Promise.reject(`invalid mapOrm`)
-    }
+    //st.mapOrm已於getProc建立st時驗證為函數, 且st不外露, 故此處不再檢查
 
     //funChecks, 擴充檢查, 提供給各 mOrm[OOO].mjs 檢查
     await pmSeries(st.funChecks, (v) => {
@@ -65,11 +62,16 @@ async function procOrm(st, userId, woName, mode, input) {
 }
 
 
-function getProc(mapOrm) {
+function getProc(mapOrm, opt = {}) {
+    //mapOrm為getMapOrm之回傳函數, opt目前無設定鍵, 只檢查已移除之設定; 使用端有直接呼叫者(如測試以getMapOrm與getProc組出procOrm), 故檢查與WServOrm一致
+    //建構期之錯誤一律為Error, 與procOrm之字串reject區隔
+
+    //checkOptRemoved
+    checkOptRemoved(opt)
 
     //check
     if (!isfun(mapOrm)) {
-        return Promise.reject(`invalid mapOrm`)
+        throw new Error(`invalid mapOrm`)
     }
 
     //st, 各實例之狀態, 每次呼叫各自建立, 令同一行程內之多個實例互不干擾

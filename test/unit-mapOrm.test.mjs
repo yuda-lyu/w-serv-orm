@@ -41,7 +41,7 @@ async function getReject(pm) {
 
 describe('mapOrm逐筆失敗', function() {
 
-    let so = WServOrm(ds, WOrmStub, 'stub-url', 'stub-db', { useCheckUser: false, useExcludeWhenNotAdmin: false })
+    let so = WServOrm(ds, WOrmStub, 'stub-url', 'stub-db')
     let proc = (mode, input) => so.procOrm('u1', 'tests', mode, input)
 
     beforeEach(function() {
@@ -232,7 +232,7 @@ describe('mapOrm逐筆失敗', function() {
 
 describe('mapOrm主鍵與clearXSS', function() {
 
-    let so = WServOrm(ds, WOrmStub, 'stub-url', 'stub-db', { useCheckUser: false, useExcludeWhenNotAdmin: false })
+    let so = WServOrm(ds, WOrmStub, 'stub-url', 'stub-db')
     let proc = (mode, input) => so.procOrm('u1', 'tests', mode, input)
 
     beforeEach(function() {
