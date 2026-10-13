@@ -44,17 +44,18 @@ describe('procOrm接w-orm-lowdb', function() {
     })
 
     it('A02 del含無效主鍵', async function() {
-        //R02: 逐筆ok為0即reject並列出失敗主鍵; R10: 單筆失敗不中斷整批, 有效筆已刪除
-        let err = await getReject(proc('del', [{ id: 'a1' }, { id: 123 }]))
-        assert.strict.equal(err, 'failed to delete data: id[123]')
+        //R02: 逐筆ok為0即reject並列出失敗筆(無有效主鍵者列位置); R10: 單筆失敗不中斷整批, 有效筆已刪除
+        //無效主鍵取非字串非數字之值: 數字依R-ID-02轉為字串後為有效主鍵(未命中), 不再觸發逐筆失敗
+        let err = await getReject(proc('del', [{ id: 'a1' }, { id: true }]))
+        assert.strict.equal(err, 'failed to delete data: data[1]')
         let rs = await proc('select', { id: 'a1' })
         assert.strict.equal(rs.length, 0)
     })
 
     it('A03 mix之del含無效主鍵', async function() {
-        //R03: del之逐筆失敗不中斷diff, diff已寫入, 最後reject列出del之失敗
-        let err = await getReject(proc('mix', { del: [{ id: 456 }], diff: [{ id: 'a2', isActive: 'y' }] }))
-        assert.strict.equal(err, 'failed to delete data: id[456]')
+        //R03: del之逐筆失敗不中斷diff, diff已寫入, 最後reject列出del之失敗(未帶主鍵之列以位置列出)
+        let err = await getReject(proc('mix', { del: [{ id: null }], diff: [{ id: 'a2', isActive: 'y' }] }))
+        assert.strict.equal(err, 'failed to delete data: data[0]')
         let rs = await proc('select', { id: 'a2' })
         assert.strict.equal(rs.length, 1)
     })

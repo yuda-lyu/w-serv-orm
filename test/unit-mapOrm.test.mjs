@@ -119,8 +119,8 @@ describe('mapOrm逐筆失敗', function() {
     })
 
     it('U10 del數字主鍵ok為0', async function() {
-        //R02: del逐筆ok為0即reject; 數字主鍵照列
-        plan.del = () => [okDel, { n: 0, nDeleted: 0, ok: 0, err: 'can not delete by invalid id[123]' }]
+        //R02: del逐筆ok為0即reject; 數字主鍵依R-ID-02轉為字串後交ORM, 訊息照列
+        plan.del = () => [okDel, { n: 1, nDeleted: 0, ok: 0, err: 'E-del' }]
         let err = await getReject(proc('del', [{ id: 'd1' }, { id: 123 }]))
         assert.strict.equal(err, 'failed to delete data: id[123]')
     })
@@ -277,10 +277,10 @@ describe('mapOrm主鍵與clearXSS', function() {
     })
 
     it('X05 數字主鍵、未帶主鍵與不被改寫之主鍵照常寫入', async function() {
-        //判準為是否被改寫: 數字不經清除, 未帶主鍵者由本套件補值, 白名單標籤之規範寫法不被改寫
+        //判準為是否被改寫: 數字依R-ID-02轉為字串(不含標記), 未帶主鍵者由本套件補值, 白名單標籤之規範寫法不被改寫
         plan.save = (data) => data.map(() => okSave)
         let r = await proc('save', [{ id: 5 }, { id: '<b>粗體</b>' }, { name: 'no-id' }])
-        assert.strict.equal(r[0].id, 5)
+        assert.strict.equal(r[0].id, '5')
         assert.strict.equal(r[1].id, '<b>粗體</b>')
         assert.ok(typeof r[2].id === 'string' && r[2].id.length > 0)
     })
@@ -295,14 +295,14 @@ describe('mapOrm主鍵與clearXSS', function() {
     })
 
     it('X07 insert與mix各入口之其餘主鍵狀態', async function() {
-        //數字與不被改寫之主鍵照寫, mix之修改未帶主鍵者補值, mix之刪除不經clearXSS而原樣交ORM
+        //數字依R-ID-02轉為字串, 不被改寫之主鍵照寫, mix之修改未帶主鍵者補值, mix之刪除不經clearXSS而原樣交ORM
         plan.insert = (data) => ({ n: data.length, nInserted: data.length, ok: 1 })
         plan.del = (data) => data.map(() => okDel)
         plan.save = (data) => data.map(() => okSave)
         let r1 = await proc('insert', [{ id: 7 }, { id: 'a < b' }])
-        assert.strict.deepEqual(r1, [{ id: 7 }, { id: 'a < b' }])
+        assert.strict.deepEqual(r1, [{ id: '7' }, { id: 'a < b' }])
         let r2 = await proc('mix', { add: [{ id: 8 }, { id: '1 > 0' }], del: [{ id: 'a<b' }], diff: [{ id: 9 }, { id: 'x <= 5' }, { name: 'no-id' }] })
-        assert.strict.deepEqual(r2.slice(0, 5), [{ id: 8 }, { id: '1 > 0' }, { id: 'a<b' }, { id: 9 }, { id: 'x <= 5' }])
+        assert.strict.deepEqual(r2.slice(0, 5), [{ id: '8' }, { id: '1 > 0' }, { id: 'a<b' }, { id: '9' }, { id: 'x <= 5' }])
         assert.ok(typeof r2[5].id === 'string' && r2[5].id.length > 0)
         assert.strict.deepEqual(calls.map((v) => v.fn), ['insert', 'insert', 'del', 'save'])
         assert.strict.deepEqual(calls[2].data, [{ id: 'a<b' }])
