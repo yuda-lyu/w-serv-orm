@@ -41,8 +41,8 @@ function getWoItems(ds, WOrm, url, db) {
         //wo
         let wo = new WOrm(useOpt)
 
-        //save
-        woItems[v] = wo
+        //save, 以defineProperty建立自有屬性: 不用woItems[v]=wo, ds之鍵為__proto__時會改設woItems之原型而該表不可用(R-INPUT-01 規則5)
+        Object.defineProperty(woItems, v, { value: wo, enumerable: true, writable: true, configurable: true })
 
         // //change, 當數據有改變時清除快取
         // wo.on('change', (mode) => {

@@ -9,7 +9,6 @@ import fsIsFile from 'wsemi/src/fsIsFile.mjs'
 import iseobj from 'wsemi/src/iseobj.mjs'
 import isearr from 'wsemi/src/isearr.mjs'
 import isestr from 'wsemi/src/isestr.mjs'
-import haskey from 'wsemi/src/haskey.mjs'
 import isfun from 'wsemi/src/isfun.mjs'
 import isbol from 'wsemi/src/isbol.mjs'
 import j2o from 'wsemi/src/j2o.mjs'
@@ -78,7 +77,7 @@ async function recover(fp, woItems, genModels, needCreateStorage = false) {
         if (!isestr(name)) {
             throw new Error(`invalid backup data, rs[${k}].name is not a string`)
         }
-        if (!haskey(woItems, name)) {
+        if (!Object.prototype.hasOwnProperty.call(woItems, name)) { //自有屬性, 不用haskey(in運算含原型鏈, constructor、toString等通過驗證後才在寫入時失敗)
             throw new Error(`invalid backup data, table[${name}] is not in woItems`)
         }
     })

@@ -71,9 +71,19 @@ function isPkIdString(dsTab, keys) {
 }
 
 
+function getOwnItem(o, k) {
+    //取o之自有屬性k, 非自有、k非字串、o非物件或值為undefined者回傳null(R-INPUT-01 規則5)
+    //不用lodash get: 其會取到原型鏈上之值(__proto__、constructor、toString等)並解析路徑字串(如'tests.select'取到ORM之函數); 鍵本身含「.」者為自有屬性, 照常
+    if (o === null || typeof o !== 'object' || typeof k !== 'string' || !Object.prototype.hasOwnProperty.call(o, k)) {
+        return null
+    }
+    return o[k] === undefined ? null : o[k]
+}
+
+
 function isIdCast(ds, woName) {
     //資料表之主鍵欄為字串型或型別未知者, 主鍵之有限數字以其字串形式處置(R-ID-02); ds無該表者不轉型, 令select與del照舊原樣交ORM
-    let dsTab = get(ds, woName, null)
+    let dsTab = getOwnItem(ds, woName)
     let keys = get(dsTab, 'keys', null)
     if (!isarr(keys)) {
         return false
@@ -96,6 +106,171 @@ function castIdValue(v) {
 }
 
 
+function mapOwn(o, f) {
+    //使用端物件之複製與逐鍵轉換(R-OBJ-01 規則1、2): 只走自有可列舉鍵, 回傳新物件, f收(值, 鍵)
+    //不用lodash each: 其對具非負整數length鍵之物件(如{length:1,name:'x'})採陣列樣迭代, 只走索引0..length-1而丟棄全部自有鍵
+    //以fromEntries建立自有屬性, 不用r[k]=v: k為__proto__時會改設r之原型而不建立自有屬性
+    return Object.fromEntries(Object.keys(o).map((k) => [k, f(o[k], k)]))
+}
+
+
+//不支援之鍵或屬性的原因與訊息(R-OBJ-01 規則3、5), 訊息只列固定字句, 不回顯客戶端之值
+const MSGS_BAD_KEY = Object.freeze({
+    proto: 'unsupported key[__proto__]',
+    accessor: 'unsupported accessor property',
+    unreadable: 'unreadable value',
+    deep: 'too deep',
+})
+
+//find之巢狀深度上限, 以容器(一般物件與陣列)層數計, 根為第1層(R-OBJ-01 規則5)
+//castIdFind、castIdCond以遞迴處理$and、$or、$nor與$not, 遞迴深度即呼叫堆疊深度, 實測字串型主鍵表約1173層$and(約2346個容器)起爆堆疊;
+//64個容器層約為32層邏輯巢狀, 遠大於合理查詢(庫內最深約7個容器)而遠小於爆堆疊之閾值
+const MAX_DEPTH_FIND = 64
+
+
+function isPlainObj(v) {
+    //純物件(R-INPUT-01 規則3): isobj為真且原型為null, 或為某realm之Object.prototype(同lodash isPlainObject: 原型之原型為null、有constructor函數、其函數原始碼同Object, 故跨realm之物件亦通過)
+    //類別實例、Object.create(proto)、原型為null原型之一般物件、偽造Symbol.toStringTag之Map或包裝物件, 其自有可列舉鍵可能為空而被複製成{}, 令條件消失, 故不算
+    if (!isobj(v)) {
+        return false
+    }
+    let p = Object.getPrototypeOf(v)
+    if (p === null) {
+        return true
+    }
+    //p之原型為null, 故p.constructor只可能是p之自有屬性
+    return Object.getPrototypeOf(p) === null &&
+        typeof p.constructor === 'function' &&
+        Function.prototype.toString.call(p.constructor) === Function.prototype.toString.call(Object)
+}
+
+
+function logSafe(label, ...args) {
+    //診斷用之console.log: 輸出使用端原物件時會呼叫其util.inspect.custom, 拋錯不得使procOrm之reject變成例外物件(R-ERR-01 規則5)
+    try {
+        console.log(label, ...args)
+    }
+    catch (e) {
+        try {
+            console.log(label, '(unprintable)')
+        }
+        catch (e2) {
+            //放棄輸出
+        }
+    }
+}
+
+
+function getReasonBadKey(v, maxDepth = Infinity) {
+    //v之任何深度(一般物件之值、陣列之元素)含不支援之鍵或屬性者回傳原因(R-OBJ-01 規則3、5), 通過回傳null:
+    //  proto: 含自有__proto__鍵, 不論可否列舉; 自有鍵可由JSON.parse、Object.fromEntries、展開、structuredClone等產生, 物件字面量之__proto__為設原型而不算
+    //  accessor: 含存取器屬性(getter或setter), 其值每讀一次可能不同, 令檢查之值與使用之值無法保證相同, 且讀取可能有副作用
+    //  unreadable: 檢查時拋錯, 如Proxy之陷阱或已撤銷之Proxy
+    //  deep: 容器(一般物件與陣列)層數超過maxDepth(根為第1層), 走訪到第maxDepth+1層即停止; 只有find給予maxDepth, 寫入列不設上限(見R-OBJ-01 規則5)
+    //只走一般物件與陣列(JSON可表達之資料)之可列舉資料屬性, 以屬性描述子讀值而不呼叫getter; 其餘型別(Date、Map、Set、函數等)不進入
+    //以堆疊迭代避免本檢查爆呼叫堆疊(其後castIdFind、castIdCond之遞迴由maxDepth保護), seen避免循環結構無窮迭代(循環不會被判為過深, 見R-OBJ-01 已知限制)
+    try {
+        let seen = new Set()
+        let stack = [v, 1] //成對: 節點, 其層數
+        while (stack.length > 0) {
+            let depth = stack.pop()
+            let o = stack.pop()
+            let arr = Array.isArray(o) //不用isarr: 其以Object.prototype.toString判定, 可被Symbol.toStringTag偽造而走訪其length getter; 偽造者isobj亦為假, 故不進入
+            if (seen.has(o) || (!arr && !isobj(o))) {
+                continue
+            }
+            if (depth > maxDepth) {
+                return 'deep'
+            }
+            seen.add(o)
+            if (Object.prototype.hasOwnProperty.call(o, '__proto__')) {
+                return 'proto'
+            }
+            let ks = arr ? null : Object.keys(o)
+            let n = arr ? o.length : ks.length
+            for (let i = 0; i < n; i++) {
+                let d = Object.getOwnPropertyDescriptor(o, arr ? i : ks[i])
+                if (d === undefined) {
+                    continue //稀疏陣列之空洞
+                }
+                if (d.get !== undefined || d.set !== undefined) {
+                    return 'accessor'
+                }
+                if (typeof d.value === 'object' && d.value !== null) {
+                    stack.push(d.value, depth + 1)
+                }
+            }
+        }
+        return null
+    }
+    catch (e) {
+        return 'unreadable'
+    }
+}
+
+
+function getErrFind(mode, find) {
+    //select、delAll之find檢查(R-INPUT-01 規則3、R-OBJ-01 規則3), 通過回傳null, 否則回傳reject之字串
+    //find給予(非undefined)須為純物件: 未給、undefined與空物件{}為無條件(select回全部、delAll刪全部), 各後端對非物件之find多視為無條件而回全表或刪全表, 故由本套件先擋
+    //任何深度不得含自有__proto__鍵(複製時該鍵會被丟棄, 令ORM所見之條件與呼叫端含授權函數所見者不同)與存取器屬性(見getReasonBadKey), 且巢狀深度不得超過MAX_DEPTH_FIND
+    try {
+        if (find !== undefined && !isPlainObj(find)) {
+            return `invalid find of ${mode}, need an object`
+        }
+        let reason = getReasonBadKey(find, MAX_DEPTH_FIND)
+        if (reason !== null) {
+            return `invalid find of ${mode}, ${MSGS_BAD_KEY[reason]}`
+        }
+        return null
+    }
+    catch (e) {
+        //isobj、取原型時拋錯, 如已撤銷之Proxy
+        return `invalid find of ${mode}, ${MSGS_BAD_KEY.unreadable}`
+    }
+}
+
+
+function getMsgsBadKey(msg, data) {
+    //寫入之各筆任何深度含不支援之鍵或屬性者(R-OBJ-01 規則3), 依原因分組回傳訊息陣列, 各組列其於輸入內之位置data[k]; 單一物件輸入視為第0筆
+    //輸入為陣列時(批次容器)逐索引以屬性描述子取值: 索引為存取器即reject, 使其後各次讀取皆為資料屬性之讀取而與檢查之值一致
+    let groups = new Map()
+    let addFail = (reason, k) => {
+        if (!groups.has(reason)) {
+            groups.set(reason, [])
+        }
+        groups.get(reason).push({ k })
+    }
+    if (Array.isArray(data)) {
+        for (let k = 0; k < data.length; k++) {
+            try {
+                let d = Object.getOwnPropertyDescriptor(data, k)
+                if (d === undefined) {
+                    continue //空洞, 已於形狀檢查以非物件拒絕
+                }
+                if (d.get !== undefined || d.set !== undefined) {
+                    addFail('accessor', k)
+                    continue
+                }
+                let reason = getReasonBadKey(d.value)
+                if (reason !== null) {
+                    addFail(reason, k)
+                }
+            }
+            catch (e) { //Proxy陣列之陷阱拋錯
+                addFail('unreadable', k)
+            }
+        }
+    }
+    else {
+        let reason = getReasonBadKey(data)
+        if (reason !== null) {
+            addFail(reason, 0)
+        }
+    }
+    return map([...groups], ([reason, fails]) => getMsgFail(`${msg}, ${MSGS_BAD_KEY[reason]}`, fails))
+}
+
+
 function castIdRows(rows) {
     //寫入與刪除之數據: 各列之主鍵正規化, 寫於複本, 不改呼叫端之物件; 非物件之列原樣
     let one = !isarr(rows)
@@ -114,19 +289,15 @@ function castIdCond(c) {
     if (!isobj(c)) {
         return castIdValue(c)
     }
-    let r = {}
-    each(c, (v, k) => {
+    return mapOwn(c, (v, k) => {
         if (k === '$not') {
-            r[k] = castIdCond(v)
+            return castIdCond(v)
         }
-        else if (['$eq', '$ne', '$gt', '$gte', '$lt', '$lte', '$in', '$nin', '$all'].indexOf(k) >= 0) {
-            r[k] = isarr(v) ? map(v, castIdValue) : castIdValue(v)
+        if (['$eq', '$ne', '$gt', '$gte', '$lt', '$lte', '$in', '$nin', '$all'].indexOf(k) >= 0) {
+            return isarr(v) ? map(v, castIdValue) : castIdValue(v)
         }
-        else {
-            r[k] = v
-        }
+        return v
     })
-    return r
 }
 
 
@@ -135,19 +306,15 @@ function castIdFind(find) {
     if (!isobj(find)) {
         return find
     }
-    let r = {}
-    each(find, (v, k) => {
+    return mapOwn(find, (v, k) => {
         if (k === 'id') {
-            r[k] = castIdCond(v)
+            return castIdCond(v)
         }
-        else if (['$and', '$or', '$nor'].indexOf(k) >= 0 && isarr(v)) {
-            r[k] = map(v, castIdFind)
+        if (['$and', '$or', '$nor'].indexOf(k) >= 0 && isarr(v)) {
+            return map(v, castIdFind)
         }
-        else {
-            r[k] = v
-        }
+        return v
     })
-    return r
 }
 
 
@@ -310,13 +477,10 @@ function adjustData(ds, woName, userId, data, mode = 'save') { //mode: 'insert',
 
     //clearXSS
     if (true) {
-        data = map(data, (v, k) => {
-            let dt = {}
-            each(v, (vv, kk) => {
-                vv = clearXSS(vv)
-                dt[kk] = vv
+        data = map(data, (v) => {
+            return mapOwn(v, (vv) => {
+                return clearXSS(vv)
             })
-            return dt
         })
     }
 
@@ -344,6 +508,22 @@ function adjustData(ds, woName, userId, data, mode = 'save') { //mode: 'insert',
 
 
 async function mapOrm(ds, woItems, userId, woName, mode, input) {
+    //邊界保證(R-ERR-01 規則5): execMapOrm之檢查、轉型與ORM呼叫階段, 非字串之例外(RangeError、使用端物件之Proxy陷阱/toString拋錯、woItems之非ORM值等)
+    //一律console.log原文後以固定字串reject, 不轉出例外物件與其拋出之值; 字串(各處之固定訊息)原樣轉出
+    try {
+        return await execMapOrm(ds, woItems, userId, woName, mode, input)
+    }
+    catch (e) {
+        if (typeof e === 'string') {
+            return Promise.reject(e)
+        }
+        logSafe(`${typeof woName === 'string' ? woName : ''}.${typeof mode === 'string' ? mode : ''} mapOrm catch`, e)
+        return Promise.reject('failed to process input')
+    }
+}
+
+
+async function execMapOrm(ds, woItems, userId, woName, mode, input) {
     //由woName自動綁定至woItems內的ORM物件
     let err = null
     let r
@@ -353,18 +533,25 @@ async function mapOrm(ds, woItems, userId, woName, mode, input) {
         return Promise.reject(`invalid woItems`)
     }
 
-    //wo
-    let wo = get(woItems, woName, null)
+    //wo, woName須為woItems之自有字串屬性(R-INPUT-01 規則5)
+    let wo = getOwnItem(woItems, woName)
 
-    //check
+    //check, 訊息回顯字串之woName為既有慣例(R-MSG-01 其他已知限制), 非字串者不回顯
     if (wo === null) {
-        return Promise.reject(`can not find table[${woName}] in ORM`)
+        return Promise.reject(`can not find table[${typeof woName === 'string' ? woName : ''}] in ORM`)
     }
 
     //idCast, 主鍵之有限數字以其字串形式處置(R-ID-02), 寫入、刪除與查詢條件共用同一判定
     let idCast = isIdCast(ds, woName)
 
     if (mode === 'select') {
+
+        //check, 條件若給予須為一般物件且不含自有__proto__鍵(R-INPUT-01 規則3、R-OBJ-01 規則3), 於轉型與查詢之前
+        let errFind = getErrFind('select', input)
+        if (errFind !== null) {
+            logSafe(`${woName}.select invalid find`, input)
+            return Promise.reject(errFind)
+        }
 
         //select, 條件中主鍵之比較值轉型(R-ID-02)
         r = await wo.select(idCast ? castIdFind(input) : input)
@@ -392,6 +579,13 @@ async function mapOrm(ds, woItems, userId, woName, mode, input) {
         if (size(failsNotObj) > 0) {
             console.log(`${woName}.${mode} data is not an object`, failsNotObj)
             return Promise.reject(getMsgFail(`${msgMode}, not an object`, failsNotObj))
+        }
+
+        //check, 各筆任何深度不得含自有__proto__鍵與存取器屬性, 否則整批拒絕且不寫入任何一筆(R-OBJ-01 規則3)
+        let msgsBadKey = getMsgsBadKey(msgMode, input)
+        if (size(msgsBadKey) > 0) {
+            console.log(`${woName}.${mode} data has unsupported key`, msgsBadKey)
+            return Promise.reject(join(msgsBadKey, '; '))
         }
 
         //castIdRows, 主鍵之有限數字轉為字串, 寫於複本(R-ID-02)
@@ -485,10 +679,11 @@ async function mapOrm(ds, woItems, userId, woName, mode, input) {
     }
     else if (mode === 'delAll') {
 
-        //check, 條件若給予須為一般物件(R-INPUT-01): 各後端對非物件之條件一律視為無條件而刪除全表; 未給(undefined)與空物件依規格為刪除全部
-        if (input !== undefined && !isobj(input)) {
-            console.log(`${woName}.delAll invalid find`, input)
-            return Promise.reject('invalid find of delAll, need an object')
+        //check, 條件若給予須為一般物件(R-INPUT-01 規則3): 各後端對非物件之條件一律視為無條件而刪除全表; 未給(undefined)與空物件依規格為刪除全部; 另不得含自有__proto__鍵(R-OBJ-01 規則3)
+        let errFind = getErrFind('delAll', input)
+        if (errFind !== null) {
+            logSafe(`${woName}.delAll invalid find`, input)
+            return Promise.reject(errFind)
         }
 
         //delAll, 條件中主鍵之比較值轉型(R-ID-02)
@@ -505,6 +700,15 @@ async function mapOrm(ds, woItems, userId, woName, mode, input) {
         if (!iseobj(input)) {
             return Promise.reject('invalid input of mix, need the result object of ltdtDiffByKey')
         }
+
+        //check, add、del、diff為存取器者整批拒絕(R-OBJ-01 規則3 批次容器), 並取快照(各讀一次, 其後只用快照), 使各檢查與寫入所見一致
+        for (let key of ['add', 'del', 'diff']) {
+            let d = Object.getOwnPropertyDescriptor(input, key)
+            if (d !== undefined && (d.get !== undefined || d.set !== undefined)) {
+                return Promise.reject(`invalid input of mix, ${MSGS_BAD_KEY.accessor}`)
+            }
+        }
+        input = { add: input.add, del: input.del, diff: input.diff }
 
         //check, add、del、diff若給予須為陣列(R-INPUT-01), 否則各段之回傳將逐欄位產生
         for (let key of ['add', 'del', 'diff']) {
@@ -524,6 +728,16 @@ async function mapOrm(ds, woItems, userId, woName, mode, input) {
         }
         if (size(msgsNotObj) > 0) {
             return Promise.reject(join(msgsNotObj, '; '))
+        }
+
+        //check, 新增與修改之各筆任何深度不得含自有__proto__鍵與存取器屬性, 於任何步驟寫入之前整批拒絕(R-OBJ-01 規則3); del之各筆不檢查(R-OBJ-01 已知限制)
+        let msgsBadKey = []
+        for (let [key, msg] of [['add', 'failed to insert data'], ['diff', 'failed to update data']]) {
+            msgsBadKey.push(...getMsgsBadKey(msg, get(input, key, [])))
+        }
+        if (size(msgsBadKey) > 0) {
+            console.log(`${woName}.mix data has unsupported key`, msgsBadKey)
+            return Promise.reject(join(msgsBadKey, '; '))
         }
 
         //castIdRows, 各段主鍵之有限數字轉為字串, 寫於複本(R-ID-02)

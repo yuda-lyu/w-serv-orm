@@ -112,6 +112,17 @@ describe('getDb備份與還原', function() {
         assert.strict.deepEqual(log, [])
     })
 
+    it('B04b recover之備份之name為原型鏈名稱(constructor、toString、__proto__)即於寫入前reject, 不留部分還原', async function() {
+        //R-DB-01 規則3: 原 wsemi haskey 為 in 運算, 原型鏈名稱通過驗證, 前面之表寫入後才以 TypeError 失敗(外審 opus 二輪 F9)
+        for (let name of ['constructor', 'toString', '__proto__']) {
+            let log = []
+            let fp = writeBackup(`proto-${name}.json`, JSON.stringify([{ name: 'tests', data: [{ id: 'a' }] }, { name, data: [{ id: 'z' }] }]))
+            let err = await quiet(() => getReject(getDb.recover(mkWoItems(log), fp, { bLog: false })))
+            assert.ok(String(err).includes('invalid backup data') && String(err).includes(name), `${name}: ${err}`)
+            assert.strict.deepEqual(log, [], `${name}: 不應有任何寫入`)
+        }
+    })
+
     it('B05 recover成功', async function() {
         //D5: 成功路徑不變
         let log = []
