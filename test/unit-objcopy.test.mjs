@@ -477,9 +477,9 @@ describe('R-OBJ-01 規則3 自有__proto__鍵 fail-closed', function() {
         }
     })
 
-    it.skip('K01 [wsemi已知缺陷, 待升版後取消skip] 欄位值內具整數length鍵之巢狀物件, 其內字串亦須被清除且不新增索引鍵', async function() {
-        //R-OBJ-01 已知限制: wsemi 1.9.17 之 clearXSS 以 lodash each 遞迴巢狀物件, {length:3,a:'<script>'} 之 a 不被清除並新增 0、1、2 鍵,
-        //length 極大時更於複本建立同數量之屬性而耗盡記憶體(外審 opus #1); 本套件不於專案端繞道, 見 建議wsemi修正.md
+    it('K01 欄位值內具整數length鍵之巢狀物件, 其內字串亦須被清除且不新增索引鍵', async function() {
+        //R-OBJ-01: wsemi 1.9.17 以前之 clearXSS 以 lodash each 遞迴巢狀物件, {length:3,a:'<script>'} 之 a 不被清除並新增 0、1、2 鍵,
+        //length 極大時更於複本建立同數量之屬性而耗盡記憶體(外審 opus #1); wsemi 1.9.18 已修, 本案自此啟用
         let so = WServOrm(dsStr, WOrmStub, 'u', 'd')
         await so.procOrm('u1', 'tests', 'insert', [{ id: 'k1', meta: { length: 3, a: '<script>alert(1)</script>' } }])
         same(calls[0].data[0].meta, { length: 3, a: '&lt;script>alert(1)&lt;/script>' }, '巢狀物件之清除')
