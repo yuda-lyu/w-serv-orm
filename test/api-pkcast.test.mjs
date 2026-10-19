@@ -94,20 +94,44 @@ describe('數字主鍵接w-orm-lowdb', function() {
         assert.deepStrictEqual(await rows(), [['999', 'p']])
     })
 
-    it('A12 查詢與delAll之條件以數字給予: 等值、$in、$ne、$not命中字串主鍵, 範圍依字典序', async function() {
-        //R-ID-02 規則2(查詢條件)與已知限制(範圍依字典序: '40' < '5')
+    it('A12 查詢與delAll之條件以數字給予: 等值、$in、$ne、$nin與$and、$or巢狀命中字串主鍵, 範圍依字典序', async function() {
+        //R-ID-02 規則2(查詢條件)與已知限制(範圍依字典序: '40' < '5'); R-WL-01 規則3(只轉型白名單內之運算子)
         await proc('insert', [{ id: 5, isActive: 'y' }, { id: 40, isActive: 'y' }, { id: 'abc', isActive: 'y' }])
         let ids = async (find) => (await proc('select', find)).map((v) => v.id).sort()
         assert.deepStrictEqual(await ids({ id: 5 }), ['5'])
         assert.deepStrictEqual(await ids({ id: { $in: [5, 40] } }), ['40', '5'])
         assert.deepStrictEqual(await ids({ id: { $ne: 5 } }), ['40', 'abc'])
-        assert.deepStrictEqual(await ids({ id: { $not: { $eq: 5 } } }), ['40', 'abc'])
+        assert.deepStrictEqual(await ids({ id: { $nin: [5] } }), ['40', 'abc'])
+        assert.deepStrictEqual(await ids({ $or: [{ id: 5 }, { id: 40 }] }), ['40', '5'])
+        assert.deepStrictEqual(await ids({ $and: [{ id: { $in: [5, 40] } }, { id: { $ne: 40 } }] }), ['5'])
         assert.deepStrictEqual(await ids({ id: { $lt: 5 } }), ['40'])
         let r1 = await proc('delAll', { id: { $in: [40] } })
         assert.deepStrictEqual(r1, { n: 1, nDeleted: 1, ok: 1 })
         let r2 = await proc('delAll', { id: 5 })
         assert.deepStrictEqual(r2, { n: 1, nDeleted: 1, ok: 1 })
         assert.deepStrictEqual(await rows(), [['abc', 'y']])
+    })
+
+    it('A19 白名單外之運算子: 後端reject, select以failed to select data、delAll以failed to delete data固定字串回傳, 表內容不變', async function() {
+        //R-WL-01 規則3、4; R-ERR-01 規則1: 白名單由後端(w-orm-lowdb >= 1.0.32之cvOrmFind)把關, 本套件不轉型亦不放行, 後端原文只進log
+        await proc('insert', [{ id: 5, isActive: 'y' }, { id: 40, isActive: 'y' }, { id: 'abc', isActive: 'y' }])
+        let before = await rows()
+        let finds = [
+            { id: { $not: { $eq: 5 } } },
+            { id: { $all: [5] } },
+            { $nor: [{ id: 5 }] },
+            { id: { $regex: '^a' } },
+            { isActive: { $exists: true } },
+            { $where: 'true' },
+            { $expr: true },
+        ]
+        for (let find of finds) {
+            let es = await quiet(() => getReject(proc('select', find)))
+            assert.strictEqual(es, 'failed to select data', `select ${JSON.stringify(find)}`)
+            let ed = await quiet(() => getReject(proc('delAll', find)))
+            assert.strictEqual(ed, 'failed to delete data', `delAll ${JSON.stringify(find)}`)
+        }
+        assert.deepStrictEqual(await rows(), before, 'delAll被拒後表內容不變')
     })
 
 })

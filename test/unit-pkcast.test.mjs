@@ -105,18 +105,17 @@ describe('R-ID-02 字串型主鍵欄之數字主鍵以字串處置', function() 
         assert.strictEqual(err, 'failed to delete data: id[123]')
     })
 
-    it('N03 查詢條件之比較運算子(含$not與巢狀)轉型, 他欄與其餘運算子不變, 呼叫端條件不變', async function() {
-        //R-ID-02 規則2(查詢條件)、規則4
+    it('N03 查詢條件之白名單內比較運算子(含$and、$or巢狀)轉型, 他欄與其餘運算子不變, 呼叫端條件不變', async function() {
+        //R-ID-02 規則2(查詢條件)、規則4; R-WL-01 規則3(轉型範圍只及系列白名單: $eq $ne $gt $gte $lt $lte $in $nin, 文件層$and $or)
         let so = WServOrm(dsStr, WOrmStub, 'u', 'd')
         let finds = [
             { id: 123 },
             { id: { $eq: 1, $ne: 2, $gt: 3, $gte: 4, $lt: 5, $lte: 6 } },
-            { id: { $in: [7, 'a'], $nin: [8], $all: [9] } },
-            { id: { $not: { $eq: 10 } } },
-            { id: { $not: { $in: [11, 12] } } },
-            { $or: [{ id: 13 }, { name: 'x' }], $and: [{ id: { $in: [14] } }], $nor: [{ id: 15 }] },
+            { id: { $in: [7, 'a'], $nin: [8] } },
+            { $or: [{ id: 13 }, { name: 'x' }], $and: [{ id: { $in: [14] } }] },
             { $and: [{ $or: [{ id: 16 }] }] },
             { name: 17, id: { $regex: '^a', $exists: true } },
+            { id: { $eq: [9], $ne: [10, 'b'], $gt: [11], $gte: [12], $lt: [13], $lte: [14] } }, //比較運算子之值為陣列者逐一轉型(替身ORM; 真後端對 $in、$nin 以外之陣列值本就reject)
         ]
         let findsCopy = JSON.parse(JSON.stringify(finds))
         for (let f of finds) {
@@ -127,12 +126,11 @@ describe('R-ID-02 字串型主鍵欄之數字主鍵以字串處置', function() 
         assert.deepStrictEqual(calls.map((c) => c.data), [
             { id: '123' },
             { id: { $eq: '1', $ne: '2', $gt: '3', $gte: '4', $lt: '5', $lte: '6' } },
-            { id: { $in: ['7', 'a'], $nin: ['8'], $all: ['9'] } },
-            { id: { $not: { $eq: '10' } } },
-            { id: { $not: { $in: ['11', '12'] } } },
-            { $or: [{ id: '13' }, { name: 'x' }], $and: [{ id: { $in: ['14'] } }], $nor: [{ id: '15' }] },
+            { id: { $in: ['7', 'a'], $nin: ['8'] } },
+            { $or: [{ id: '13' }, { name: 'x' }], $and: [{ id: { $in: ['14'] } }] },
             { $and: [{ $or: [{ id: '16' }] }] },
             { name: 17, id: { $regex: '^a', $exists: true } },
+            { id: { $eq: ['9'], $ne: ['10', 'b'], $gt: ['11'], $gte: ['12'], $lt: ['13'], $lte: ['14'] } },
             { id: '18' },
             { id: { $in: ['19'] } },
         ])
@@ -216,6 +214,60 @@ describe('R-ID-02 字串型主鍵欄之數字主鍵以字串處置', function() 
         assert.deepStrictEqual(seen[0].input, [{ id: 1, name: 'a' }, { id: 2, name: 'pre' }])
         assert.deepStrictEqual(seen[0].output, [{ id: '1' }, { id: '2' }])
         assert.deepStrictEqual(r, [{ id: '1' }, { id: '2' }])
+    })
+
+    it('N10 系列白名單外之$not、$all、$nor及其內之id原樣交ORM而不轉型, 白名單由後端把關', async function() {
+        //R-WL-01 規則2、3: 本套件不依運算子名稱放行或攔截, 也不轉型白名單外運算子內之id; 還原$not、$all、$nor之轉型分支(死碼)則本案轉紅
+        let so = WServOrm(dsStr, WOrmStub, 'u', 'd')
+        let finds = [
+            { id: { $not: { $eq: 10 } } },
+            { id: { $not: { $in: [11, 12] } } },
+            { id: { $in: [7], $all: [9] } },
+            { $nor: [{ id: 15 }] },
+            { $or: [{ id: 13 }, { $nor: [{ id: 15 }] }], $and: [{ id: { $not: { $eq: 10 } } }] },
+        ]
+        let findsCopy = JSON.parse(JSON.stringify(finds))
+        let expected = [
+            { id: { $not: { $eq: 10 } } },
+            { id: { $not: { $in: [11, 12] } } },
+            { id: { $in: ['7'], $all: [9] } }, //同條件物件內之白名單運算子($in)仍轉型
+            { $nor: [{ id: 15 }] },
+            { $or: [{ id: '13' }, { $nor: [{ id: 15 }] }], $and: [{ id: { $not: { $eq: 10 } } }] },
+        ]
+        for (let mode of ['select', 'delAll']) {
+            calls = []
+            for (let f of finds) {
+                await so.procOrm('u1', 'tests', mode, f)
+            }
+            assert.deepStrictEqual(calls.map((c) => c.fn), finds.map(() => mode))
+            assert.deepStrictEqual(calls.map((c) => c.data), expected, mode)
+        }
+        assert.deepStrictEqual(finds, findsCopy)
+    })
+
+    it('N11 ORM以reject拒絕條件: select以failed to select data、delAll以failed to delete data固定字串回傳, ORM原文只進log', async function() {
+        //R-WL-01 規則4; R-ERR-01 規則1: 後端(白名單)拒絕時之錯誤回傳路徑, ORM之reject為Error物件或字串皆然
+        let so = WServOrm(dsStr, WOrmStub, 'u', 'd')
+        let find = { id: { $not: { $eq: 5 } } }
+        for (let orig of [new Error('invalid find: unsupported operator [$not] at [find.id.$not]'), 'invalid find: unsupported operator [$not] at [find.id.$not]']) {
+            for (let [mode, msg] of [['select', 'failed to select data'], ['delAll', 'failed to delete data']]) {
+                calls = []
+                plan = { [mode]: () => Promise.reject(orig) }
+                let logs = []
+                let logOrig = console.log
+                console.log = (...args) => logs.push(args)
+                let err
+                try {
+                    err = await getReject(so.procOrm('u1', 'tests', mode, find))
+                }
+                finally {
+                    console.log = logOrig
+                }
+                assert.strictEqual(err, msg, mode)
+                assert.strictEqual(calls.length, 1, `${mode} ORM被呼叫一次`)
+                assert.ok(logs.some((a) => a.includes(orig)), `${mode} ORM原文進log`)
+            }
+        }
     })
 
 })

@@ -1,3 +1,4 @@
+import { types } from 'util'
 import get from 'lodash-es/get.js'
 import each from 'lodash-es/each.js'
 import map from 'lodash-es/map.js'
@@ -114,39 +115,176 @@ function mapOwn(o, f) {
 }
 
 
-//不支援之鍵或屬性的原因與訊息(R-OBJ-01 規則3、5), 訊息只列固定字句, 不回顯客戶端之值
+//不支援之鍵或屬性的原因與訊息(R-OBJ-01 規則3、5、6), 訊息只列固定字句, 不回顯客戶端之值
 const MSGS_BAD_KEY = Object.freeze({
     proto: 'unsupported key[__proto__]',
     accessor: 'unsupported accessor property',
     unreadable: 'unreadable value',
     deep: 'too deep',
+    hidden: 'unsupported symbol key or non-enumerable property',
+    irregular: 'unsupported irregular object or array',
 })
 
 //find之巢狀深度上限, 以容器(一般物件與陣列)層數計, 根為第1層(R-OBJ-01 規則5)
-//castIdFind、castIdCond以遞迴處理$and、$or、$nor與$not, 遞迴深度即呼叫堆疊深度, 實測字串型主鍵表約1173層$and(約2346個容器)起爆堆疊;
+//castIdFind以遞迴處理$and、$or, 遞迴深度即呼叫堆疊深度, 實測字串型主鍵表約1173層$and(約2346個容器)起爆堆疊;
 //64個容器層約為32層邏輯巢狀, 遠大於合理查詢(庫內最深約7個容器)而遠小於爆堆疊之閾值
 const MAX_DEPTH_FIND = 64
 
+//find之字串碼元總長(字串值與物件鍵, 含重複出現者)逾此值不做整棵結構化複製, 改走精確品牌探針(R-OBJ-01 規則6 ⑥)
+//structuredClone對重複出現之字串每次皆寫出並讀回, 記憶體與(字串碼元總長 x 出現次數)成正比, 同一64KB字串於$in內重複1萬次即邏輯長度655M碼元; 與wsemi cvOrmFind之CLONE_MAX_CHARS同值
+const MAX_CHARS_CLONE = 4000000
+
+//拒收之診斷快照的上限: 值個數(含葉)、層數、每層鍵或元素數、字串長度(R-OBJ-01 規則6 ⑤)
+const SNAP_MAX_NODES = 200
+const SNAP_MAX_DEPTH = 8
+const SNAP_MAX_ITEMS = 50
+const SNAP_MAX_STR = 200
+
+//WeakRef、FinalizationRegistry之精確品牌探針(R-OBJ-01 規則6 ⑥): util.types無對應判定, 後端cvOrmFind亦以此二探針reject;
+//於模組載入時取得內建方法(不受其後全域覆寫影響), 對非該品牌之值拋TypeError, 不執行使用端程式
+const weakRefDeref = typeof WeakRef === 'function' ? Function.prototype.call.bind(WeakRef.prototype.deref) : null
+const frUnregister = typeof FinalizationRegistry === 'function' ? Function.prototype.call.bind(FinalizationRegistry.prototype.unregister) : null
+const probeToken = {}
+
+
+function isCleanChain(o) {
+    //o及其原型鏈上無Proxy、且無任何自有Symbol.toStringTag(R-OBJ-01 規則6): 全程只用util.types.isProxy(不觸發陷阱)、Object.getPrototypeOf與自有屬性查詢(不讀值),
+    //故不執行使用端程式(Proxy之陷阱、標籤getter); 不用in運算子: 其遇Proxy原型會執行has陷阱, 令檢查之值與使用之值可不同(外審第二輪 A-02)
+    for (let x = o; x !== null; x = Object.getPrototypeOf(x)) {
+        if (types.isProxy(x) || Object.prototype.hasOwnProperty.call(x, Symbol.toStringTag)) {
+            return false
+        }
+    }
+    return true
+}
+
+
+function isBrandObj(o) {
+    //內建品牌物件與其他非容器之內建物件(R-OBJ-01 規則6): 內部槽不在自有鍵中, 原型被改為null或Object.prototype而無標籤可辨時, 會被mapOwn洗成{};
+    //以util.types判定(不受原型與標籤影響, 不執行使用端程式)為主要探針; 未涵蓋者(WeakRef、FinalizationRegistry、Blob等)由hasIrregularClone之結構化複製網補
+    return types.isMap(o) || types.isSet(o) || types.isWeakMap(o) || types.isWeakSet(o) || types.isPromise(o) ||
+        types.isAnyArrayBuffer(o) || types.isArrayBufferView(o) || types.isBoxedPrimitive(o) || types.isRegExp(o) || types.isNativeError(o) ||
+        types.isGeneratorObject(o) || types.isMapIterator(o) || types.isSetIterator(o) || types.isModuleNamespaceObject(o)
+}
+
+
+function isRealmObjectProto(p) {
+    //p是否為某realm之Object.prototype(R-OBJ-01 規則6, 跨realm之純物件用): 原型為null、自有鍵名集合同本realm之Object.prototype、constructor為(資料屬性之)函數且其原始碼同Object,
+    //且該函數之prototype指回p; 只有constructor一鍵、或鍵名同而constructor指向他處(含getter)之偽原型皆不通過; 全程以屬性描述子讀取, 不執行使用端程式(p已由isCleanChain確認非Proxy)
+    if (Object.getPrototypeOf(p) !== null) {
+        return false
+    }
+    let ks0 = Reflect.ownKeys(Object.prototype)
+    if (Reflect.ownKeys(p).length !== ks0.length) {
+        return false
+    }
+    for (let k of ks0) {
+        if (!Object.prototype.hasOwnProperty.call(p, k)) {
+            return false
+        }
+    }
+    let d = Object.getOwnPropertyDescriptor(p, 'constructor')
+    if (d === undefined || typeof d.value !== 'function' || types.isProxy(d.value)) {
+        return false
+    }
+    if (Function.prototype.toString.call(d.value) !== Function.prototype.toString.call(Object)) {
+        return false
+    }
+    let dp = Object.getOwnPropertyDescriptor(d.value, 'prototype')
+    return dp !== undefined && dp.value === p
+}
+
 
 function isPlainObj(v) {
-    //純物件(R-INPUT-01 規則3): isobj為真且原型為null, 或為某realm之Object.prototype(同lodash isPlainObject: 原型之原型為null、有constructor函數、其函數原始碼同Object, 故跨realm之物件亦通過)
-    //類別實例、Object.create(proto)、原型為null原型之一般物件、偽造Symbol.toStringTag之Map或包裝物件, 其自有可列舉鍵可能為空而被複製成{}, 令條件消失, 故不算
-    if (!isobj(v)) {
+    //純物件(R-INPUT-01 規則3、R-OBJ-01 規則6): 無Proxy與Symbol.toStringTag(原型鏈上皆不得有, 見isCleanChain)、isobj為真,
+    //且原型為null、本realm之Object.prototype,或某realm之Object.prototype(isRealmObjectProto, 故跨realm(vm)之物件通過)
+    //類別實例、Object.create(proto)、原型為null原型之一般物件、宣稱Symbol.toStringTag之Map或包裝物件, 其自有可列舉鍵可能為空而被複製成{}, 令條件消失, 故不算
+    if (typeof v !== 'object' || v === null || !isCleanChain(v) || !isobj(v)) {
         return false
     }
     let p = Object.getPrototypeOf(v)
-    if (p === null) {
+    return p === null || p === Object.prototype || isRealmObjectProto(p)
+}
+
+
+function getKindFind(o) {
+    //find節點之分類(R-OBJ-01 規則6), 檢查(getReasonBadKey strict)與複製(castIdFind、castIdCond)共用同一判準, 使複本與原物件在後端所見等價:
+    //  'arr': 真陣列(Array.isArray); 'obj': 一般物件(isobj); null: 不是容器, 原值或原參考交後端(原始值、函數、Date等)
+    //有Proxy、有Symbol.toStringTag(自有或繼承)、或為內建品牌物件者不分類(null), 由檢查reject: 以isCleanChain判斷而不讀標籤、不觸發陷阱,
+    //故不執行使用端程式, 亦不致檢查與複製各讀一次而得不同結果
+    if (typeof o !== 'object' || o === null || !isCleanChain(o) || isBrandObj(o)) {
+        return null
+    }
+    if (Array.isArray(o)) {
+        return 'arr'
+    }
+    return isobj(o) ? 'obj' : null
+}
+
+
+function hasIrregularClone(v) {
+    //品牌物件之通用網(R-OBJ-01 規則6): 以一次結構化複製證明v之容器皆為一般物件、陣列或Date; isBrandObj(util.types)已涵蓋常見內建品牌物件, 此網補其餘(Blob、WeakRef、FinalizationRegistry、Intl.*等):
+    //複製拋錯(Proxy、WeakRef、FinalizationRegistry、函數值、Symbol值等),或複本之容器原型不是Object.prototype、Array.prototype、Date.prototype(Blob等複製後仍為原品牌, 含原型被改為null者,
+    //其內部槽不在自有鍵中, 無標籤可辨, 又會被mapOwn洗成{})者, 回傳true; 呼叫時v已確認無Proxy與存取器(複製不執行使用端程式)
+    if (typeof structuredClone !== 'function') {
+        return false //執行環境無結構化複製(Node 17以前)則無此網(呼叫端getReasonBadKey此時改走hasWeakSlot之精確探針)
+    }
+    let c
+    try {
+        c = structuredClone(v)
+    }
+    catch (e) {
         return true
     }
-    //p之原型為null, 故p.constructor只可能是p之自有屬性
-    return Object.getPrototypeOf(p) === null &&
-        typeof p.constructor === 'function' &&
-        Function.prototype.toString.call(p.constructor) === Function.prototype.toString.call(Object)
+    let seen = new Set()
+    let stack = [c]
+    while (stack.length > 0) {
+        let o = stack.pop()
+        if (typeof o !== 'object' || o === null || seen.has(o)) {
+            continue
+        }
+        seen.add(o)
+        let p = Object.getPrototypeOf(o)
+        if (p === Date.prototype) {
+            continue
+        }
+        if (p !== Object.prototype && p !== Array.prototype) {
+            return true
+        }
+        for (let k of Object.keys(o)) {
+            stack.push(o[k])
+        }
+    }
+    return false
+}
+
+
+function hasWeakSlot(o) {
+    //o是否為WeakRef或FinalizationRegistry(R-OBJ-01 規則6 ⑥, 品牌網逾字元預算或無structuredClone時用): 以內建方法之品牌檢查判斷, 非該品牌即拋TypeError; 呼叫時o已確認非Proxy
+    if (weakRefDeref !== null) {
+        try {
+            weakRefDeref(o)
+            return true
+        }
+        catch (e) {
+            //非WeakRef
+        }
+    }
+    if (frUnregister !== null) {
+        try {
+            frUnregister(o, probeToken)
+            return true
+        }
+        catch (e) {
+            //非FinalizationRegistry
+        }
+    }
+    return false
 }
 
 
 function logSafe(label, ...args) {
-    //診斷用之console.log: 輸出使用端原物件時會呼叫其util.inspect.custom, 拋錯不得使procOrm之reject變成例外物件(R-ERR-01 規則5)
+    //診斷用之console.log: 引數若含使用端物件(如mapOrm catch輸出之被拋出的值)會被格式化而呼叫其util.inspect.custom等, 拋錯不得使procOrm之reject變成例外物件(R-ERR-01 規則5); find一律經logFind輸出快照(R-OBJ-01 規則6 ⑤)
     try {
         console.log(label, ...args)
     }
@@ -161,24 +299,135 @@ function logSafe(label, ...args) {
 }
 
 
-function getReasonBadKey(v, maxDepth = Infinity) {
-    //v之任何深度(一般物件之值、陣列之元素)含不支援之鍵或屬性者回傳原因(R-OBJ-01 規則3、5), 通過回傳null:
+function snapSafe(v, st = { n: 0 }, depth = 0) {
+    //診斷輸出用之安全快照(R-OBJ-01 規則6 ⑤): 回傳本層新建之純資料, 全程只用型別探針(util.types)與屬性描述子, 不呼叫getter、不讀Symbol.toStringTag、不觸發Proxy陷阱、不呼叫util.inspect.custom,
+    //故console.log格式化的是快照而非使用端物件(原以console.log輸出原物件時, 格式化會在拒收之後執行使用端程式, 其副作用可改動呼叫端的find);
+    //Proxy、函數、Symbol、品牌物件、存取器與Date以固定字樣代替, 不可列舉鍵加註, 並有值個數(含葉)、層數、每層項數與字串長度之上限(診斷輸出不隨輸入放大)
+    if (st.n >= SNAP_MAX_NODES) {
+        return '[...]'
+    }
+    st.n++
+    if (typeof v === 'string') {
+        return truncate(v, { length: SNAP_MAX_STR })
+    }
+    if (typeof v === 'function') {
+        return '[Function]'
+    }
+    if (typeof v === 'symbol') {
+        return '[Symbol]'
+    }
+    if (typeof v !== 'object' || v === null) {
+        return v
+    }
+    if (types.isProxy(v)) {
+        return '[Proxy]'
+    }
+    if (types.isDate(v)) {
+        return '[Date]'
+    }
+    if (isBrandObj(v)) {
+        return '[Object]'
+    }
+    if (depth >= SNAP_MAX_DEPTH) {
+        return '[...]'
+    }
+    let snapDesc = (d) => {
+        if (d === undefined) {
+            return '[empty]'
+        }
+        if (d.get !== undefined || d.set !== undefined) {
+            return '[Getter/Setter]'
+        }
+        return snapSafe(d.value, st, depth + 1)
+    }
+    if (Array.isArray(v)) {
+        let n = Math.min(v.length, SNAP_MAX_ITEMS)
+        let rs = []
+        for (let i = 0; i < n; i++) {
+            rs.push(snapDesc(Object.getOwnPropertyDescriptor(v, i)))
+        }
+        if (v.length > n) {
+            rs.push(`[${v.length - n} more]`)
+        }
+        return rs
+    }
+    let ks = Reflect.ownKeys(v)
+    let r = {}
+    for (let k of ks.slice(0, SNAP_MAX_ITEMS)) {
+        let d = Object.getOwnPropertyDescriptor(v, k)
+        let name = typeof k === 'symbol' ? String(k) : k
+        Object.defineProperty(r, d.enumerable ? name : `${name} (non-enumerable)`, { value: snapDesc(d), enumerable: true, writable: true, configurable: true })
+    }
+    if (ks.length > SNAP_MAX_ITEMS) {
+        Object.defineProperty(r, '[more]', { value: ks.length - SNAP_MAX_ITEMS, enumerable: true, writable: true, configurable: true })
+    }
+    return r
+}
+
+
+function logFind(label, input) {
+    //被拒之find的診斷輸出(R-OBJ-01 規則6 ⑤): 輸出snapSafe之快照而非原物件, 不執行使用端程式
+    let snap
+    try {
+        snap = snapSafe(input)
+    }
+    catch (e) {
+        snap = '(unprintable)'
+    }
+    logSafe(label, snap)
+}
+
+
+function getReasonBadKey(v, maxDepth = Infinity, strict = false) {
+    //v之任何深度(一般物件之值、陣列之元素)含不支援之鍵或屬性者回傳原因(R-OBJ-01 規則3、5、6), 通過回傳null:
     //  proto: 含自有__proto__鍵, 不論可否列舉; 自有鍵可由JSON.parse、Object.fromEntries、展開、structuredClone等產生, 物件字面量之__proto__為設原型而不算
     //  accessor: 含存取器屬性(getter或setter), 其值每讀一次可能不同, 令檢查之值與使用之值無法保證相同, 且讀取可能有副作用
     //  unreadable: 檢查時拋錯, 如Proxy之陷阱或已撤銷之Proxy
     //  deep: 容器(一般物件與陣列)層數超過maxDepth(根為第1層), 走訪到第maxDepth+1層即停止; 只有find給予maxDepth, 寫入列不設上限(見R-OBJ-01 規則5)
-    //只走一般物件與陣列(JSON可表達之資料)之可列舉資料屬性, 以屬性描述子讀值而不呼叫getter; 其餘型別(Date、Map、Set、函數等)不進入
+    //strict(只有find開啟, 規則6): castIdFind、castIdCond以mapOwn(只走自有可列舉字串鍵)與lodash map(只走索引)複製find, 複本會洗掉下列結構,
+    //令後端白名單版本會reject之條件變成較寬甚至無條件(delAll刪全表), 故走訪到之每個節點須為複本與原物件等價者, 容器之分類與複製共用getKindFind:
+    //  irregular: 有Symbol.toStringTag(原型鏈上任一層之自有屬性, 含內建品牌物件與宣稱標籤者, 以hasOwnProperty判斷而不讀取)、物件節點非純物件(類別實例、偽原型等, 同頂層之isPlainObj)、
+    //    陣列節點有空洞、不可列舉元素或額外屬性(含Symbol鍵), 或結構化複製證明有品牌物件與不可複製者(Proxy、函數值等, 見hasIrregularClone);
+    //    字串碼元總長逾MAX_CHARS_CLONE或無structuredClone時不做結構化複製, 改以hasWeakSlot逐一探針WeakRef與FinalizationRegistry(規則6 ⑥)
+    //  hidden: 物件節點有Symbol鍵或不可列舉鍵
+    //寫入列不開strict: 後端自己亦略過Symbol鍵與不可列舉鍵, 複本不改變其語意
+    //只走一般物件與陣列(JSON可表達之資料)之可列舉資料屬性, 以屬性描述子讀值而不呼叫getter; 其餘型別(Date、函數等)不進入
     //以堆疊迭代避免本檢查爆呼叫堆疊(其後castIdFind、castIdCond之遞迴由maxDepth保護), seen避免循環結構無窮迭代(循環不會被判為過深, 見R-OBJ-01 已知限制)
     try {
         let seen = new Set()
         let stack = [v, 1] //成對: 節點, 其層數
+        let chars = 0 //strict: 走訪到之字串碼元總長(字串值與物件鍵, 含重複出現者), 供品牌網之預算判斷
+        let nodes = [] //strict: 走訪到之物件節點(純物件), 供逾預算時逐一探針
         while (stack.length > 0) {
             let depth = stack.pop()
             let o = stack.pop()
-            let arr = Array.isArray(o) //不用isarr: 其以Object.prototype.toString判定, 可被Symbol.toStringTag偽造而走訪其length getter; 偽造者isobj亦為假, 故不進入
-            if (seen.has(o) || (!arr && !isobj(o))) {
+            if (seen.has(o)) {
                 continue
             }
+            let kind
+            if (strict) {
+                //Proxy(含原型鏈上者)、標籤與內建品牌物件須先於任何會執行使用端程式之判定(isobj讀標籤、in運算子、讀屬性), 且以不觸發陷阱之方式判斷(isCleanChain、isBrandObj)
+                if (typeof o === 'object' && o !== null) {
+                    if (!isCleanChain(o) || isBrandObj(o)) {
+                        return 'irregular'
+                    }
+                    if (types.isDate(o)) {
+                        //Date為葉(原值交後端, 後端只讀其時間槽), 但須乾淨: 附加之自有屬性(含__proto__鍵、getter)會被前後處理函數與診斷輸出看到(外審第二輪 A-06)
+                        if (Reflect.ownKeys(o).length > 0) {
+                            return 'irregular'
+                        }
+                        continue
+                    }
+                }
+                kind = getKindFind(o)
+            }
+            else {
+                kind = Array.isArray(o) ? 'arr' : (isobj(o) ? 'obj' : null) //寫入列維持原判準; 不用isarr: 其以Object.prototype.toString判定, 可被Symbol.toStringTag宣稱而走訪其length getter
+            }
+            if (kind === null) {
+                continue
+            }
+            let arr = kind === 'arr'
             if (depth > maxDepth) {
                 return 'deep'
             }
@@ -187,17 +436,57 @@ function getReasonBadKey(v, maxDepth = Infinity) {
                 return 'proto'
             }
             let ks = arr ? null : Object.keys(o)
+            if (strict && !arr) {
+                if (!isPlainObj(o)) {
+                    return 'irregular'
+                }
+                if (Reflect.ownKeys(o).length !== ks.length) {
+                    return 'hidden'
+                }
+                nodes.push(o)
+            }
             let n = arr ? o.length : ks.length
             for (let i = 0; i < n; i++) {
                 let d = Object.getOwnPropertyDescriptor(o, arr ? i : ks[i])
                 if (d === undefined) {
+                    if (strict) {
+                        return 'irregular' //空洞: map以array[index]讀到原型上之繼承值而成為密陣列(寫入列則不檢查)
+                    }
                     continue //稀疏陣列之空洞
                 }
                 if (d.get !== undefined || d.set !== undefined) {
                     return 'accessor'
                 }
+                if (strict && arr && !d.enumerable) {
+                    return 'irregular'
+                }
+                if (strict) {
+                    chars += arr ? 0 : ks[i].length
+                    if (typeof d.value === 'string') {
+                        chars += d.value.length
+                    }
+                }
                 if (typeof d.value === 'object' && d.value !== null) {
                     stack.push(d.value, depth + 1)
+                }
+            }
+            if (strict && arr && Reflect.ownKeys(o).length !== n + 1) {
+                return 'irregular' //除索引與length外另有自有鍵
+            }
+        }
+        //品牌物件與不可複製者之通用網, 於走訪全數通過(已無存取器)之後: 字串碼元總長在預算內且有structuredClone時以一次結構化複製證明,
+        //否則(逾預算或無structuredClone)對走訪到之物件節點逐一以精確探針判斷util.types無對應判定之WeakRef與FinalizationRegistry(規則6 ⑥)
+        if (strict && typeof v === 'object' && v !== null) {
+            if (chars <= MAX_CHARS_CLONE && typeof structuredClone === 'function') {
+                if (hasIrregularClone(v)) {
+                    return 'irregular'
+                }
+            }
+            else {
+                for (let i = 0; i < nodes.length; i++) {
+                    if (hasWeakSlot(nodes[i])) {
+                        return 'irregular'
+                    }
                 }
             }
         }
@@ -211,13 +500,17 @@ function getReasonBadKey(v, maxDepth = Infinity) {
 
 function getErrFind(mode, find) {
     //select、delAll之find檢查(R-INPUT-01 規則3、R-OBJ-01 規則3), 通過回傳null, 否則回傳reject之字串
-    //find給予(非undefined)須為純物件: 未給、undefined與空物件{}為無條件(select回全部、delAll刪全部), 各後端對非物件之find多視為無條件而回全表或刪全表, 故由本套件先擋
+    //find給予(非undefined)須為純物件: 未給、undefined與空物件{}為無條件(select回全部、delAll刪全部), 舊版(未實作系列條件白名單)後端對非物件之find多視為無條件而回全表或刪全表, 且本套件之複本會洗掉類別實例等之條件, 故由本套件先擋
     //任何深度不得含自有__proto__鍵(複製時該鍵會被丟棄, 令ORM所見之條件與呼叫端含授權函數所見者不同)與存取器屬性(見getReasonBadKey), 且巢狀深度不得超過MAX_DEPTH_FIND
+    //並以strict檢查複本會洗掉之結構(Symbol鍵、不可列舉鍵、巢狀非純物件、不規則陣列; R-OBJ-01 規則6), 不論資料表型態
     try {
+        if (find !== undefined && typeof find === 'object' && find !== null && types.isProxy(find)) {
+            return `invalid find of ${mode}, ${MSGS_BAD_KEY.irregular}` //Proxy(含已撤銷者)於任何位置皆reject, 不觸發任何陷阱(R-OBJ-01 規則6)
+        }
         if (find !== undefined && !isPlainObj(find)) {
             return `invalid find of ${mode}, need an object`
         }
-        let reason = getReasonBadKey(find, MAX_DEPTH_FIND)
+        let reason = getReasonBadKey(find, MAX_DEPTH_FIND, true)
         if (reason !== null) {
             return `invalid find of ${mode}, ${MSGS_BAD_KEY[reason]}`
         }
@@ -285,16 +578,15 @@ function castIdRows(rows) {
 
 
 function castIdCond(c) {
-    //主鍵之條件: 值或運算子物件; 比較運算子之值(陣列逐一)轉型, $not遞迴, 其餘運算子($regex、$exists等)原樣
-    if (!isobj(c)) {
+    //主鍵之條件: 值或運算子物件; 只轉型系列白名單內比較運算子($eq、$ne、$gt、$gte、$lt、$lte、$in、$nin)之值(陣列逐一), 其餘運算子原樣
+    //白名單外之運算子($not、$all、$nor、$regex、$exists等)由各w-orm後端整批reject, 本套件不轉型亦不攔截(R-WL-01)
+    //容器之判定用getKindFind, 與getErrFind之檢查同一判準(R-OBJ-01 規則6); 非'obj'、'arr'者原值或原參考交後端
+    if (getKindFind(c) !== 'obj') {
         return castIdValue(c)
     }
     return mapOwn(c, (v, k) => {
-        if (k === '$not') {
-            return castIdCond(v)
-        }
-        if (['$eq', '$ne', '$gt', '$gte', '$lt', '$lte', '$in', '$nin', '$all'].indexOf(k) >= 0) {
-            return isarr(v) ? map(v, castIdValue) : castIdValue(v)
+        if (['$eq', '$ne', '$gt', '$gte', '$lt', '$lte', '$in', '$nin'].indexOf(k) >= 0) {
+            return getKindFind(v) === 'arr' ? map(v, castIdValue) : castIdValue(v)
         }
         return v
     })
@@ -302,15 +594,16 @@ function castIdCond(c) {
 
 
 function castIdFind(find) {
-    //查詢條件(select、delAll之find): id之條件轉型, 遞迴$and、$or、$nor; 他欄原樣; 寫於複本, 非物件原樣
-    if (!isobj(find)) {
+    //查詢條件(select、delAll之find): id之條件轉型, 遞迴文件層$and、$or; 他欄原樣; 寫於複本, 非物件原樣
+    //容器之判定用getKindFind, 與getErrFind之檢查同一判準(R-OBJ-01 規則6)
+    if (getKindFind(find) !== 'obj') {
         return find
     }
     return mapOwn(find, (v, k) => {
         if (k === 'id') {
             return castIdCond(v)
         }
-        if (['$and', '$or', '$nor'].indexOf(k) >= 0 && isarr(v)) {
+        if (['$and', '$or'].indexOf(k) >= 0 && getKindFind(v) === 'arr') {
             return map(v, castIdFind)
         }
         return v
@@ -549,7 +842,7 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input) {
         //check, 條件若給予須為一般物件且不含自有__proto__鍵(R-INPUT-01 規則3、R-OBJ-01 規則3), 於轉型與查詢之前
         let errFind = getErrFind('select', input)
         if (errFind !== null) {
-            logSafe(`${woName}.select invalid find`, input)
+            logFind(`${woName}.select invalid find`, input)
             return Promise.reject(errFind)
         }
 
@@ -679,10 +972,10 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input) {
     }
     else if (mode === 'delAll') {
 
-        //check, 條件若給予須為一般物件(R-INPUT-01 規則3): 各後端對非物件之條件一律視為無條件而刪除全表; 未給(undefined)與空物件依規格為刪除全部; 另不得含自有__proto__鍵(R-OBJ-01 規則3)
+        //check, 條件若給予須為一般物件(R-INPUT-01 規則3): 舊版(未實作系列條件白名單)後端對非物件之條件一律視為無條件而刪除全表; 未給(undefined)與空物件依規格為刪除全部; 另不得含自有__proto__鍵(R-OBJ-01 規則3)
         let errFind = getErrFind('delAll', input)
         if (errFind !== null) {
-            logSafe(`${woName}.delAll invalid find`, input)
+            logFind(`${woName}.delAll invalid find`, input)
             return Promise.reject(errFind)
         }
 

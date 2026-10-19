@@ -112,4 +112,18 @@ function same(actual, expected, label = '') {
 }
 
 
-export { createStub, getReject, quiet, same }
+//mkForgedObjProto: 仿 Object.prototype 之偽原型(R-OBJ-01 規則 6, 外審第二輪 A-01、A-03): 原型為 null, 自有鍵名與描述子皆同本 realm 之 Object.prototype(鍵數相同),
+//constructor 預設為本 realm 之 Object(但 Object.prototype 不是此偽原型, 後端要求原型須為本 realm 之 Object.prototype 或 null); 可傳 ctor 描述子覆寫 constructor
+function mkForgedObjProto(ctor) {
+    let p = Object.create(null)
+    for (let k of Reflect.ownKeys(Object.prototype)) {
+        Object.defineProperty(p, k, Object.getOwnPropertyDescriptor(Object.prototype, k))
+    }
+    if (ctor !== undefined) {
+        Object.defineProperty(p, 'constructor', ctor)
+    }
+    return p
+}
+
+
+export { createStub, getReject, quiet, same, mkForgedObjProto }
