@@ -82,6 +82,24 @@ function getOwnItem(o, k) {
 }
 
 
+function isArr(v) {
+    //是否為真陣列(Array.isArray, 不用wsemi isarr: 其以Object.prototype.toString判定, 可被Symbol.toStringTag宣稱而走訪其length getter, R-OBJ-01 規則7 ④)
+    //已撤銷之Proxy使Array.isArray拋TypeError, 視為非陣列(由列檢查以irregular回報, 不觸發陷阱)
+    try {
+        return Array.isArray(v)
+    }
+    catch (e) {
+        return false
+    }
+}
+
+
+function isAcc(d) {
+    //描述子是否為存取器: 以有無value欄位判斷, 不以get/set是否非undefined(get與set皆為undefined之存取器 Object.defineProperty(o, 'id', { get: undefined, set: undefined, enumerable: true }) 亦為存取器)
+    return !Object.prototype.hasOwnProperty.call(d, 'value')
+}
+
+
 function isIdCast(ds, woName) {
     //資料表之主鍵欄為字串型或型別未知者, 主鍵之有限數字以其字串形式處置(R-ID-02); ds無該表者不轉型, 令select與del照舊原樣交ORM
     let dsTab = getOwnItem(ds, woName)
@@ -115,12 +133,14 @@ function mapOwn(o, f) {
 }
 
 
-//不支援之鍵或屬性的原因與訊息(R-OBJ-01 規則3、5、6), 訊息只列固定字句, 不回顯客戶端之值
+//不支援之鍵或屬性的原因與訊息(R-OBJ-01 規則3、5、5續、6、7), 訊息只列固定字句, 不回顯客戶端之值
 const MSGS_BAD_KEY = Object.freeze({
     proto: 'unsupported key[__proto__]',
     accessor: 'unsupported accessor property',
     unreadable: 'unreadable value',
     deep: 'too deep',
+    large: 'too large',
+    sparse: 'unsupported sparse array',
     hidden: 'unsupported symbol key or non-enumerable property',
     irregular: 'unsupported irregular object or array',
 })
@@ -129,6 +149,15 @@ const MSGS_BAD_KEY = Object.freeze({
 //castIdFind以遞迴處理$and、$or, 遞迴深度即呼叫堆疊深度, 實測字串型主鍵表約1173層$and(約2346個容器)起爆堆疊;
 //64個容器層約為32層邏輯巢狀, 遠大於合理查詢(庫內最深約7個容器)而遠小於爆堆疊之閾值
 const MAX_DEPTH_FIND = 64
+
+//原型鏈長度上限(isCleanChain; R-OBJ-01 規則6、7)
+const MAX_CHAIN = 64
+
+//find展開後之物件總數上限(不含陣列; 共用子結構依出現次數重複計, R-OBJ-01 規則5續)
+//getReasonBadKey以seen去重而castIdFind依路徑展開, 指數型共用子結構(x_{i+1}={$and:[x_i,x_i]})k層展開2^(k+1)-1個物件, 實測k=22約5.7秒、+762MB, 256MB堆積下k=22即OOM崩潰(無法catch);
+//與wsemi cvOrmFind之maxNodes(100000)同值且口徑為其子集: 後端計節點(條件物件、運算子物件、純量各計1, $and/$or之陣列不計), 本層只計物件, 故凡本層因逾此值拒收者後端必也拒收, 本層不拒收後端會接受者
+//(castIdFind只經物件遞迴$and、$or之元素, 陣列元素不展開, 故不計陣列仍足以限制其展開量)
+const MAX_NODES_FIND = 100000
 
 //find之字串碼元總長(字串值與物件鍵, 含重複出現者)逾此值不做整棵結構化複製, 改走精確品牌探針(R-OBJ-01 規則6 ⑥)
 //structuredClone對重複出現之字串每次皆寫出並讀回, 記憶體與(字串碼元總長 x 出現次數)成正比, 同一64KB字串於$in內重複1萬次即邏輯長度655M碼元; 與wsemi cvOrmFind之CLONE_MAX_CHARS同值
@@ -150,8 +179,10 @@ const probeToken = {}
 function isCleanChain(o) {
     //o及其原型鏈上無Proxy、且無任何自有Symbol.toStringTag(R-OBJ-01 規則6): 全程只用util.types.isProxy(不觸發陷阱)、Object.getPrototypeOf與自有屬性查詢(不讀值),
     //故不執行使用端程式(Proxy之陷阱、標籤getter); 不用in運算子: 其遇Proxy原型會執行has陷阱, 令檢查之值與使用之值可不同(外審第二輪 A-02)
+    //原型鏈長度逾MAX_CHAIN者視為不乾淨(合法物件之原型鏈至多數層), 令每次分類之成本有界: 共用陣列帶P層原型而被引用E次時, measureFind與castIdFind之分類為E x P(外審 sol F08)
+    let n = 0
     for (let x = o; x !== null; x = Object.getPrototypeOf(x)) {
-        if (types.isProxy(x) || Object.prototype.hasOwnProperty.call(x, Symbol.toStringTag)) {
+        if (n++ > MAX_CHAIN || types.isProxy(x) || Object.prototype.hasOwnProperty.call(x, Symbol.toStringTag)) {
             return false
         }
     }
@@ -335,7 +366,7 @@ function snapSafe(v, st = { n: 0 }, depth = 0) {
         if (d === undefined) {
             return '[empty]'
         }
-        if (d.get !== undefined || d.set !== undefined) {
+        if (isAcc(d)) {
             return '[Getter/Setter]'
         }
         return snapSafe(d.value, st, depth + 1)
@@ -378,12 +409,114 @@ function logFind(label, input) {
 }
 
 
+function getRowId(row) {
+    //寫入列(及mix之del列)之主鍵值: 只認自有、可列舉之資料屬性, 其餘(不可列舉、繼承、存取器、無此屬性)視為未提供, 不執行任何getter
+    //與adjustData之mapOwn(只複製自有可列舉鍵)一致, 令本套件所見之id即實際寫入之id
+    if (typeof row !== 'object' || row === null) {
+        return undefined
+    }
+    let d = Object.getOwnPropertyDescriptor(row, 'id')
+    if (d === undefined || !d.enumerable || isAcc(d)) {
+        return undefined
+    }
+    return d.value
+}
+
+
+function firstBadIndex(a) {
+    //陣列首個空洞或存取器索引, 回傳[索引, 'sparse'|'accessor'], 無則null; 成本為該索引之位置, 稀疏巨陣列於索引0即返回
+    //索引為存取器者, 其後各步驟(each、map以array[index]讀取)會執行使用端程式並可每次回傳不同列(外審 sol F01)
+    for (let i = 0; i < a.length; i++) {
+        let d = Object.getOwnPropertyDescriptor(a, i)
+        if (d === undefined) {
+            return [i, 'sparse']
+        }
+        if (isAcc(d)) {
+            return [i, 'accessor']
+        }
+    }
+    return null
+}
+
+
+function getKidsFind(o) {
+    //容器o之容器子節點(依出現次數, 含重複); 呼叫時find已通過strict檢查(只含乾淨之純物件與密陣列, 無存取器), 故可直接以描述子讀值
+    let rs = []
+    let ks = Array.isArray(o) ? null : Object.keys(o)
+    let n = ks === null ? o.length : ks.length
+    for (let i = 0; i < n; i++) {
+        let v = Object.getOwnPropertyDescriptor(o, ks === null ? i : ks[i]).value
+        if (getKindFind(v) !== null) {
+            rs.push(v)
+        }
+    }
+    return rs
+}
+
+
+function measureFind(root, maxDepth, maxNodes) {
+    //find之最長路徑深度(容器=物件與陣列)與展開後物件數(不含陣列; 共用子結構依出現次數重複計), 通過回傳null, 逾上限回傳'deep'(含循環)或'large'(R-OBJ-01 規則5續)
+    //getReasonBadKey以seen去重而只計首次到達之深度, 共用子結構(DAG)可繞過maxDepth, 且castIdFind依路徑展開, 指數型DAG展開2^k個物件
+    //作法: 顯式堆疊之記憶化後序走訪, 每個容器只展開一次(O(節點+邊)); 堆疊深度不超過maxDepth+1(逾即返回); 展開數於逾maxNodes即返回, 不產生大數
+    let st = new Map() //容器 -> -1(走訪中, 遇到即為循環) | 展開後容器數(已完成)
+    let dep = new Map() //容器 -> 以其為根之最長路徑容器數
+    let stack = [{ o: root, kids: getKidsFind(root), i: 0, d: 0, n: Array.isArray(root) ? 0 : 1 }]
+    st.set(root, -1)
+    while (stack.length > 0) {
+        let f = stack[stack.length - 1]
+        if (stack.length > maxDepth) {
+            return 'deep'
+        }
+        if (f.i < f.kids.length) {
+            let c = f.kids[f.i++]
+            let s = st.get(c)
+            if (s === undefined) {
+                st.set(c, -1)
+                stack.push({ o: c, kids: getKidsFind(c), i: 0, d: 0, n: Array.isArray(c) ? 0 : 1 })
+            }
+            else if (s === -1) {
+                return 'deep'
+            }
+            else {
+                f.n += s
+                f.d = Math.max(f.d, dep.get(c))
+                if (f.n > maxNodes) {
+                    return 'large'
+                }
+                if (stack.length + dep.get(c) > maxDepth) {
+                    return 'deep'
+                }
+            }
+        }
+        else {
+            stack.pop()
+            st.set(f.o, f.n)
+            dep.set(f.o, f.d + 1)
+            if (stack.length > 0) {
+                let p = stack[stack.length - 1]
+                p.n += f.n
+                p.d = Math.max(p.d, f.d + 1)
+                if (p.n > maxNodes) {
+                    return 'large'
+                }
+                if (stack.length + dep.get(f.o) > maxDepth) {
+                    return 'deep'
+                }
+            }
+        }
+    }
+    return null
+}
+
+
 function getReasonBadKey(v, maxDepth = Infinity, strict = false) {
     //v之任何深度(一般物件之值、陣列之元素)含不支援之鍵或屬性者回傳原因(R-OBJ-01 規則3、5、6), 通過回傳null:
     //  proto: 含自有__proto__鍵, 不論可否列舉; 自有鍵可由JSON.parse、Object.fromEntries、展開、structuredClone等產生, 物件字面量之__proto__為設原型而不算
     //  accessor: 含存取器屬性(getter或setter), 其值每讀一次可能不同, 令檢查之值與使用之值無法保證相同, 且讀取可能有副作用
     //  unreadable: 檢查時拋錯, 如Proxy之陷阱或已撤銷之Proxy
+    //  sparse: 陣列有空洞(寫入列; 逐索引迴圈對稀疏巨陣列近乎不終止, 其後clearXSS又把空洞展成密陣列, 規則7 ⑤; find之strict路徑同樣拒收但回irregular)
     //  deep: 容器(一般物件與陣列)層數超過maxDepth(根為第1層), 走訪到第maxDepth+1層即停止; 只有find給予maxDepth, 寫入列不設上限(見R-OBJ-01 規則5)
+    //  large、deep(共用子結構與循環): strict走訪全數通過後由measureFind判定最長路徑與展開後容器數(規則5續), 因seen去重只計首次到達之深度
     //strict(只有find開啟, 規則6): castIdFind、castIdCond以mapOwn(只走自有可列舉字串鍵)與lodash map(只走索引)複製find, 複本會洗掉下列結構,
     //令後端白名單版本會reject之條件變成較寬甚至無條件(delAll刪全表), 故走訪到之每個節點須為複本與原物件等價者, 容器之分類與複製共用getKindFind:
     //  irregular: 有Symbol.toStringTag(原型鏈上任一層之自有屬性, 含內建品牌物件與宣稱標籤者, 以hasOwnProperty判斷而不讀取)、物件節點非純物件(類別實例、偽原型等, 同頂層之isPlainObj)、
@@ -392,7 +525,7 @@ function getReasonBadKey(v, maxDepth = Infinity, strict = false) {
     //  hidden: 物件節點有Symbol鍵或不可列舉鍵
     //寫入列不開strict: 後端自己亦略過Symbol鍵與不可列舉鍵, 複本不改變其語意
     //只走一般物件與陣列(JSON可表達之資料)之可列舉資料屬性, 以屬性描述子讀值而不呼叫getter; 其餘型別(Date、函數等)不進入
-    //以堆疊迭代避免本檢查爆呼叫堆疊(其後castIdFind、castIdCond之遞迴由maxDepth保護), seen避免循環結構無窮迭代(循環不會被判為過深, 見R-OBJ-01 已知限制)
+    //以堆疊迭代避免本檢查爆呼叫堆疊(其後castIdFind、castIdCond之遞迴由maxDepth保護), seen避免循環結構無窮迭代(循環與共用子結構之深度與展開由其後之measureFind判定)
     try {
         let seen = new Set()
         let stack = [v, 1] //成對: 節點, 其層數
@@ -449,12 +582,10 @@ function getReasonBadKey(v, maxDepth = Infinity, strict = false) {
             for (let i = 0; i < n; i++) {
                 let d = Object.getOwnPropertyDescriptor(o, arr ? i : ks[i])
                 if (d === undefined) {
-                    if (strict) {
-                        return 'irregular' //空洞: map以array[index]讀到原型上之繼承值而成為密陣列(寫入列則不檢查)
-                    }
-                    continue //稀疏陣列之空洞
+                    //空洞: find的map以array[index]讀到原型上之繼承值而成為密陣列; 寫入列逐索引迴圈對稀疏巨陣列(如new Array(2**32-1))近乎不終止, 其後的複製又把空洞展成密陣列
+                    return strict ? 'irregular' : 'sparse'
                 }
-                if (d.get !== undefined || d.set !== undefined) {
+                if (isAcc(d)) {
                     return 'accessor'
                 }
                 if (strict && arr && !d.enumerable) {
@@ -477,6 +608,11 @@ function getReasonBadKey(v, maxDepth = Infinity, strict = false) {
         //品牌物件與不可複製者之通用網, 於走訪全數通過(已無存取器)之後: 字串碼元總長在預算內且有structuredClone時以一次結構化複製證明,
         //否則(逾預算或無structuredClone)對走訪到之物件節點逐一以精確探針判斷util.types無對應判定之WeakRef與FinalizationRegistry(規則6 ⑥)
         if (strict && typeof v === 'object' && v !== null) {
+            //最長路徑深度與展開後容器數(共用子結構、循環), 於結構化複製之前: 走訪全數通過故已無存取器與Proxy
+            let rm = measureFind(v, maxDepth, MAX_NODES_FIND)
+            if (rm !== null) {
+                return rm
+            }
             if (chars <= MAX_CHARS_CLONE && typeof structuredClone === 'function') {
                 if (hasIrregularClone(v)) {
                     return 'irregular'
@@ -523,6 +659,72 @@ function getErrFind(mode, find) {
 }
 
 
+function isIrregularRow(v) {
+    //寫入列是否為不乾淨之物件: Proxy、原型鏈上有Symbol.toStringTag、內建品牌物件(原型改為null之Map等無標籤可辨, 會被mapOwn洗成{}而寫入垃圾列)
+    //全程不執行使用端程式(同find之分類); 類別實例與Object.create(proto)之列仍照常(mapOwn只複製自有可列舉鍵, 與後端一致), 此為與find之strict判準的差異
+    //函數(含callable Proxy)亦判之: 宣稱Symbol.toStringTag為Object之函數可通過isobj而被當成列(外審 sol F02); 無標籤之普通函數仍由isobj判為非物件(not an object)
+    if (typeof v === 'function') {
+        return !isCleanChain(v)
+    }
+    return typeof v === 'object' && v !== null && (!isCleanChain(v) || isBrandObj(v))
+}
+
+
+function getItemsIrregularId(data) {
+    //mix之del列: 後端讀id之方式不一(lodash cloneDeep保留原型而可讀到繼承之id並執行getter, 不可列舉之id有的後端讀得到), 本套件之跨段同鍵比對(R-MIX-01)只認自有可列舉之資料屬性,
+    //id為存取器、繼承而來、不可列舉、或列為Proxy/帶標籤者, 後端與本套件所見之id可不同, 令同鍵防線失效(新增後即被刪除), 故整批拒絕; 回傳[{k}]
+    let rs = []
+    each(data, (v, k) => {
+        if ((typeof v !== 'object' || v === null) && typeof v !== 'function') {
+            return
+        }
+        if (!isCleanChain(v)) {
+            rs.push({ k }) //含Proxy(isCleanChain已含自身之判斷)與callable Proxy、宣稱標籤之函數(外審 sol F02)
+            return
+        }
+        if (typeof v === 'function') {
+            return //普通函數: 後端無id可讀, 同單獨del交後端逐筆處置
+        }
+        for (let x = v; x !== null; x = Object.getPrototypeOf(x)) {
+            let d = Object.getOwnPropertyDescriptor(x, 'id')
+            if (d !== undefined) {
+                if (x !== v || isAcc(d) || !d.enumerable) {
+                    rs.push({ k })
+                }
+                return
+            }
+        }
+    })
+    return rs
+}
+
+
+function getErrBatch(msg, data) {
+    //批次容器(insert、save、del之輸入陣列, mix之add、del、diff)須為乾淨之真密陣列, 通過回傳null, 否則回傳reject之字串
+    //Proxy與原型鏈上有標籤者: 讀length與索引會執行使用端程式; 空洞: 迴圈與lodash each、map依length逐索引, 稀疏巨陣列(如new Array(2**32-1))近乎不終止並配置同數量之物件,
+    //且空洞索引在原型上有資料時, 後續各步驟(each、map以array[index])讀到未經檢查之繼承列
+    //單一物件輸入(非陣列)不在此列, 由列檢查處理
+    let arr
+    try {
+        arr = Array.isArray(data)
+    }
+    catch (e) {
+        return `${msg}, ${MSGS_BAD_KEY.irregular}` //已撤銷之Proxy: 無法分類為陣列或單一列, 於任何讀取與ORM呼叫之前固定拒收(外審 sol F06)
+    }
+    if (!arr) {
+        return null
+    }
+    if (!isCleanChain(data)) {
+        return `${msg}, ${MSGS_BAD_KEY.irregular}`
+    }
+    let bad = firstBadIndex(data)
+    if (bad !== null) {
+        return getMsgFail(`${msg}, ${MSGS_BAD_KEY[bad[1]]}`, [{ k: bad[0] }])
+    }
+    return null
+}
+
+
 function getMsgsBadKey(msg, data) {
     //寫入之各筆任何深度含不支援之鍵或屬性者(R-OBJ-01 規則3), 依原因分組回傳訊息陣列, 各組列其於輸入內之位置data[k]; 單一物件輸入視為第0筆
     //輸入為陣列時(批次容器)逐索引以屬性描述子取值: 索引為存取器即reject, 使其後各次讀取皆為資料屬性之讀取而與檢查之值一致
@@ -533,18 +735,18 @@ function getMsgsBadKey(msg, data) {
         }
         groups.get(reason).push({ k })
     }
-    if (Array.isArray(data)) {
+    if (isArr(data)) {
         for (let k = 0; k < data.length; k++) {
             try {
                 let d = Object.getOwnPropertyDescriptor(data, k)
                 if (d === undefined) {
-                    continue //空洞, 已於形狀檢查以非物件拒絕
+                    continue //空洞, 已由getErrBatch拒收(此處為縱深防禦, 不可達)
                 }
-                if (d.get !== undefined || d.set !== undefined) {
-                    addFail('accessor', k)
+                if (isAcc(d)) {
+                    addFail('accessor', k) //索引存取器亦已由getErrBatch拒收(縱深防禦)
                     continue
                 }
-                let reason = getReasonBadKey(d.value)
+                let reason = isIrregularRow(d.value) ? 'irregular' : getReasonBadKey(d.value)
                 if (reason !== null) {
                     addFail(reason, k)
                 }
@@ -555,7 +757,7 @@ function getMsgsBadKey(msg, data) {
         }
     }
     else {
-        let reason = getReasonBadKey(data)
+        let reason = isIrregularRow(data) ? 'irregular' : getReasonBadKey(data)
         if (reason !== null) {
             addFail(reason, 0)
         }
@@ -564,12 +766,27 @@ function getMsgsBadKey(msg, data) {
 }
 
 
+function copyRowWithId(v, id) {
+    //列之複本: 自有可列舉屬性(含Symbol鍵)以其描述子複製而不讀值(存取器原樣保留、不執行), 僅id換為id; 原物件展開 { ...v, id } 會執行可列舉Symbol鍵與其他可列舉getter(外審 sol F03)
+    let r = {}
+    for (let k of Reflect.ownKeys(v)) {
+        let d = Object.getOwnPropertyDescriptor(v, k)
+        if (d.enumerable) {
+            Object.defineProperty(r, k, k === 'id' ? { value: id, writable: true, enumerable: true, configurable: true } : d)
+        }
+    }
+    return r
+}
+
+
 function castIdRows(rows) {
     //寫入與刪除之數據: 各列之主鍵正規化, 寫於複本, 不改呼叫端之物件; 非物件之列原樣
-    let one = !isarr(rows)
+    //主鍵只認自有可列舉之資料屬性(getRowId, R-OBJ-01 規則7 ①): 不可列舉、繼承、經存取器者視為未提供, 不轉型亦不執行getter
+    let one = !isArr(rows)
     let rs = map(one ? [rows] : rows, (v) => {
-        if (isobj(v) && isIdNumFinite(v.id)) {
-            return { ...v, id: castIdValue(v.id) }
+        let id = getRowId(v) //只讀自有可列舉之資料屬性, 不執行getter, 與adjustData之mapOwn所見一致
+        if (isIdNumFinite(id) && isobj(v)) {
+            return copyRowWithId(v, castIdValue(id))
         }
         return v
     })
@@ -615,7 +832,10 @@ function getItemsNotObj(data) {
     //寫入之各筆須為一般物件(R-INPUT-01), 回傳[{k}], k為其於輸入內之位置; 單一非物件輸入視為第0筆
     //非物件之元素經adjustData之clearXSS逐鍵複製時, 字串、陣列被展開成{0:...,1:...}、數字等變成{}, 寫入垃圾紀錄
     let rs = []
-    each(isarr(data) ? data : [data], (v, k) => {
+    each(isArr(data) ? data : [data], (v, k) => {
+        if (isIrregularRow(v)) {
+            return //由getMsgsBadKey以irregular回報, 且不對其執行isobj(會讀Symbol.toStringTag而執行使用端程式)
+        }
         if (!isobj(v)) {
             rs.push({ k })
         }
@@ -626,8 +846,9 @@ function getItemsNotObj(data) {
 
 function getMixIdKey(v) {
     //mix跨段比對用之主鍵鍵值(R-MIX-01): 以castIdValue正規化(有限數字取其字串形式, 與寫入、刪除之轉型同一函數), 正規化後為非空字串者取之, 其餘(未提供)不參與比對
+    //主鍵經getRowId只認自有可列舉之資料屬性, 即adjustData之mapOwn實際寫入者(原get(v, 'id')會讀到不可列舉、繼承、經存取器之id而誤拒, R-MIX-01 規則6)
     //不論資料表是否適用轉型(R-ID-02)皆正規化, 故整數主鍵欄之5與'5'亦視為同鍵
-    let id = castIdValue(get(v, 'id'))
+    let id = castIdValue(getRowId(v))
     return isestr(id) ? id : null
 }
 
@@ -673,11 +894,11 @@ function getMsgsMixSameId(input) {
 
 
 function getItemsIdXSS(data) {
-    //輸入數據之主鍵(非空字串)會被clearXSS改寫者, 回傳[{k,id}], k為其於輸入內之位置
+    //輸入數據之主鍵(非空字串)會被clearXSS改寫者, 回傳[{k,id}], k為其於輸入內之位置; 主鍵經getRowId只認自有可列舉之資料屬性(不執行getter)
     //寫入路徑之欄位皆經clearXSS而select與del不經過, 主鍵被改寫後以原主鍵查詢與刪除皆找不到, 故呼叫端須於寫入前整批拒絕
     let rs = []
-    each(isarr(data) ? data : [data], (v, k) => {
-        let id = get(v, 'id')
+    each(isArr(data) ? data : [data], (v, k) => {
+        let id = getRowId(v)
         if (isestr(id) && clearXSS(id) !== id) {
             rs.push({ k, id })
         }
@@ -691,6 +912,13 @@ function getMsgIdXSS(msg, fails) {
     return getMsgFail(`${msg}, id contains HTML markup`, map(fails, (v) => {
         return { k: v.k }
     }))
+}
+
+
+function setOwnData(o, k, v) {
+    //以defineProperty寫入自有可列舉之資料屬性, 不用賦值: 賦值會執行原型上之setter(類別DTO以setter攔截稽核欄位時, 其副作用可在跨段同鍵檢查之後改寫id, 外審 sol F04);
+    //結果與無setter時之賦值相同(呼叫端物件多一個自有欄位, 既有行為見R-OBJ-01 已知限制), 凍結物件仍拋TypeError而由adjustData之呼叫端轉為failed to adjust data
+    Object.defineProperty(o, k, { value: v, writable: true, enumerable: true, configurable: true })
 }
 
 
@@ -721,7 +949,7 @@ function adjustData(ds, woName, userId, data, mode = 'save') { //mode: 'insert',
         //userId
         if (keys.indexOf('userId') >= 0) {
             each(data, (v, k) => {
-                data[k].userId = userId
+                setOwnData(data[k], 'userId', userId)
             })
         }
 
@@ -729,21 +957,21 @@ function adjustData(ds, woName, userId, data, mode = 'save') { //mode: 'insert',
         if (keys.indexOf('timeCreate') >= 0) {
 
             each(data, (v, k) => {
-                data[k].timeCreate = t
+                setOwnData(data[k], 'timeCreate', t)
             })
         }
 
         //userIdUpdate
         if (keys.indexOf('userIdUpdate') >= 0) {
             each(data, (v, k) => {
-                data[k].userIdUpdate = userId
+                setOwnData(data[k], 'userIdUpdate', userId)
             })
         }
 
         //timeUpdate
         if (keys.indexOf('timeUpdate') >= 0) {
             each(data, (v, k) => {
-                data[k].timeUpdate = t
+                setOwnData(data[k], 'timeUpdate', t)
             })
         }
 
@@ -755,14 +983,14 @@ function adjustData(ds, woName, userId, data, mode = 'save') { //mode: 'insert',
         //userIdUpdate
         if (keys.indexOf('userIdUpdate') >= 0) {
             each(data, (v, k) => {
-                data[k].userIdUpdate = userId
+                setOwnData(data[k], 'userIdUpdate', userId)
             })
         }
 
         //timeUpdate
         if (keys.indexOf('timeUpdate') >= 0) {
             each(data, (v, k) => {
-                data[k].timeUpdate = t
+                setOwnData(data[k], 'timeUpdate', t)
             })
         }
 
@@ -867,6 +1095,13 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input) {
         //msgMode
         let msgMode = mode === 'insert' ? 'failed to insert data' : 'failed to save data'
 
+        //check, 批次容器須為乾淨之真密陣列(Proxy、標籤、空洞), 於讀取任何元素之前
+        let errBatch = getErrBatch(msgMode, input)
+        if (errBatch !== null) {
+            console.log(`${woName}.${mode} invalid batch container`)
+            return Promise.reject(errBatch)
+        }
+
         //check, 各筆須為一般物件, 否則整批拒絕且不寫入任何一筆(R-INPUT-01)
         let failsNotObj = getItemsNotObj(input)
         if (size(failsNotObj) > 0) {
@@ -948,6 +1183,13 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input) {
     }
     else if (mode === 'del') {
 
+        //check, 批次容器須為乾淨之真密陣列; 刪除之各筆仍不檢查(交後端逐筆處置)
+        let errBatch = getErrBatch('failed to delete data', input)
+        if (errBatch !== null) {
+            console.log(`${woName}.del invalid batch container`)
+            return Promise.reject(errBatch)
+        }
+
         //castIdRows, 主鍵之有限數字轉為字串, 寫於複本(R-ID-02); 刪除不經clearXSS(R-XSS-01)
         if (idCast) {
             input = castIdRows(input)
@@ -989,25 +1231,40 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input) {
     }
     else if (mode === 'mix') {
 
-        //check
-        if (!iseobj(input)) {
+        //check, input須為乾淨之一般物件: Proxy(含已撤銷者)、原型鏈有標籤者於讀取任何屬性之前拒收(iseobj讀標籤、input.add讀屬性皆會執行使用端程式, 外審 minimax F3)
+        if (typeof input !== 'object' || input === null || !isCleanChain(input) || !iseobj(input)) {
             return Promise.reject('invalid input of mix, need the result object of ltdtDiffByKey')
         }
 
-        //check, add、del、diff為存取器者整批拒絕(R-OBJ-01 規則3 批次容器), 並取快照(各讀一次, 其後只用快照), 使各檢查與寫入所見一致
+        //check, add、del、diff為存取器者整批拒絕(R-OBJ-01 規則3 批次容器), 並取自有資料屬性之快照(各讀一次, 其後只用快照; 繼承而來者不取), 使各檢查與寫入所見一致
+        let snap = {}
         for (let key of ['add', 'del', 'diff']) {
             let d = Object.getOwnPropertyDescriptor(input, key)
-            if (d !== undefined && (d.get !== undefined || d.set !== undefined)) {
+            if (d !== undefined && isAcc(d)) {
                 return Promise.reject(`invalid input of mix, ${MSGS_BAD_KEY.accessor}`)
             }
+            snap[key] = d === undefined ? undefined : d.value
         }
-        input = { add: input.add, del: input.del, diff: input.diff }
+        input = snap
 
         //check, add、del、diff若給予須為陣列(R-INPUT-01), 否則各段之回傳將逐欄位產生
         for (let key of ['add', 'del', 'diff']) {
-            if (input[key] !== undefined && !isarr(input[key])) {
+            if (input[key] !== undefined && !isArr(input[key])) {
                 return Promise.reject('invalid input of mix, need the result object of ltdtDiffByKey')
             }
+        }
+
+        //check, add、del、diff須為乾淨之真密陣列(Proxy、標籤、空洞), 於讀取任何元素之前
+        let msgsBatch = []
+        for (let [key, msg] of [['add', 'failed to insert data'], ['del', 'failed to delete data'], ['diff', 'failed to update data']]) {
+            let errBatch = getErrBatch(msg, input[key])
+            if (errBatch !== null) {
+                msgsBatch.push(errBatch)
+            }
+        }
+        if (size(msgsBatch) > 0) {
+            console.log(`${woName}.mix invalid batch container`)
+            return Promise.reject(join(msgsBatch, '; '))
         }
 
         //check, 新增與修改之各筆須為一般物件, 於任何步驟寫入之前整批拒絕(R-INPUT-01)
@@ -1031,6 +1288,13 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input) {
         if (size(msgsBadKey) > 0) {
             console.log(`${woName}.mix data has unsupported key`, msgsBadKey)
             return Promise.reject(join(msgsBadKey, '; '))
+        }
+
+        //check, del列之id不得為存取器或繼承而來(同鍵防線之前提), 於任何步驟寫入之前整批拒絕
+        let failsIrregularId = getItemsIrregularId(get(input, 'del', []))
+        if (size(failsIrregularId) > 0) {
+            console.log(`${woName}.mix del id is not an own data property`, failsIrregularId)
+            return Promise.reject(getMsgFail(`failed to delete data, ${MSGS_BAD_KEY.irregular}`, failsIrregularId))
         }
 
         //castIdRows, 各段主鍵之有限數字轉為字串, 寫於複本(R-ID-02)
@@ -1069,6 +1333,20 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input) {
 
         //msgsFail, 逐筆失敗僅影響該筆, 不中斷後續步驟, 待全部步驟完成後一併reject; 整批性錯誤則仍立即reject
         let msgsFail = []
+
+        //diff之adjustData提前於任何ORM呼叫之前(取得清除後之深複本): 後端於del步驟會讀取del列(可能執行其上之使用端程式), 其副作用不得改動尚未寫入之diff(外審 sol F03)
+        //add之adjustData原即於第一個ORM呼叫之前; 整批性之adjust失敗亦因而不致發生於add、del已寫入之後
+        let diffAdj = null
+        if (size(get(input, 'diff', [])) > 0) {
+            try {
+                diffAdj = adjustData(ds, woName, userId, get(input, 'diff', []))
+            }
+            catch (e) {
+                console.log(`${woName}.adjustData catch`, e.toString())
+                err = 'failed to adjust data'
+                return Promise.reject(err)
+            }
+        }
 
         let add = get(input, 'add', [])
         if (size(add) > 0) {
@@ -1137,15 +1415,8 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input) {
             //diffOrig, 呼叫端原輸入, 逐筆失敗之訊息以呼叫端視角列出
             let diffOrig = diff
 
-            //adjustData
-            try {
-                diff = adjustData(ds, woName, userId, diff)
-            }
-            catch (e) {
-                console.log(`${woName}.adjustData catch`, e.toString())
-                err = 'failed to adjust data'
-                return Promise.reject(err)
-            }
+            //adjustData已於上方提前完成
+            diff = diffAdj
 
             //save
             let rs = await wo.save(diff)

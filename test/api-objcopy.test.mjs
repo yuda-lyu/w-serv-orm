@@ -611,4 +611,281 @@ describe('R-OBJ-01 接w-orm-lowdb(以JS參考實作為預言機)', function() {
         }
     })
 
+    //以下為第82項(Argon 外審第三輪 B-02、A-07 與核實時另發現之 F5、F6)之真ORM案: 預言機為「直呼真ORM」之表內容(不取自被測函式回傳)
+    let hideProp = (o, k, v) => Object.defineProperty(o, k, { value: v, enumerable: false, configurable: true, writable: true })
+    let GEN = '<GEN>'
+    let snap = async () => (await rows()).map((v) => (typeof v.id === 'string' && v.id.length > 30 ? { ...v, id: GEN } : v)).sort((a, b) => (JSON.stringify(a) < JSON.stringify(b) ? -1 : 1))
+    let evilRow = () => JSON.parse('{"id":"zz","name":"e","meta":{"__proto__":{"polluted":1}}}')
+    let hasProtoKey = (v) => {
+        let found = false
+        let walk = (o) => {
+            if (o === null || typeof o !== 'object') {
+                return
+            }
+            if (Object.prototype.hasOwnProperty.call(o, '__proto__')) {
+                found = true
+            }
+            for (let k of Object.keys(o)) {
+                walk(o[k])
+            }
+        }
+        walk(v)
+        return found
+    }
+
+    it('A27 寫入列之id只認自有可列舉資料屬性: 不可列舉/繼承之id經procOrm之結果同直呼真ORM; getter不被執行, 其加入之含__proto__欄位不被寫入; null原型品牌列被拒收(B-02 ①②③④)', async function() {
+        //R-OBJ-01 規則7 ①②; 修前: 不可列舉/繼承之數字id被「復活」為自有字串id寫入(直呼則忽略並產生新主鍵); getter於檢查後被執行並可使meta含自有__proto__
+        let cases = [
+            ['自有不可列舉數字id 123', () => [hideProp({ name: 'n3' }, 'id', 123)]],
+            ['自有不可列舉字串id', () => [hideProp({ name: 'n3' }, 'id', 'a9')]],
+            ['繼承數字id', () => [Object.assign(Object.create({ id: 123 }), { name: 'n3' })]],
+            ['單一物件(非陣列)之不可列舉數字id', () => hideProp({ name: 'n3' }, 'id', 456)],
+            ['自有不可列舉getter(直呼不執行)', () => {
+                let r = { name: 'n3' }
+                Object.defineProperty(r, 'id', {
+                    enumerable: false,
+                    get() {
+                        return 'a9'
+                    }
+                })
+                return [r]
+            }],
+        ]
+        for (let mode of ['insert', 'save']) {
+            for (let [lab, mk] of cases) {
+                await reseed()
+                await so.woItems.tabA[mode](mk())
+                let direct = await snap()
+                await reseed()
+                await quiet(() => proc(mode, mk()))
+                same(await snap(), direct, `${mode} ${lab}: 表內容同直呼`)
+                assert.ok((await rows()).every((v) => v.id !== '123' && v.id !== '456'), `${mode} ${lab}: 數字id不被復活為字串id`)
+            }
+        }
+        //繼承之字串id: 真ORM(lodash cloneDeep保留原型)於邏輯上讀到原型上之id, 但序列化只含自有鍵, 結果與本層不同(直呼寫入無id之列或視為已存在), 故不以直呼為預言機;
+        //本層規則7 ①: id只認自有可列舉資料屬性, 繼承者視為未提供 → 寫入列補主鍵, 寫入內容為自有可列舉鍵
+        for (let mode of ['insert', 'save']) {
+            await reseed()
+            await quiet(() => proc(mode, [Object.assign(Object.create({ id: 'a9' }), { name: 'n3' })]))
+            let got = (await rows()).filter((v) => v.name === 'n3')
+            assert.strictEqual(got.length, 1, `${mode} 繼承字串id: 寫入一筆`)
+            assert.ok(typeof got[0].id === 'string' && got[0].id.length > 30, `${mode} 繼承字串id: 補主鍵, 實得 ${got[0].id}`)
+        }
+        //getter: 檢查通過後才被執行並向列加入含自有__proto__之meta(修前寫入); 現getter不被執行, 無自有__proto__鍵被寫入
+        for (let [lab, mkWithCounter] of [
+            ['自有不可列舉getter', (c) => {
+                let r = { name: 'n3' }
+                Object.defineProperty(r, 'id', {
+                    enumerable: false,
+                    get() {
+                        c.n++; r.meta = JSON.parse('{"__proto__":{"polluted":1}}'); return 'a3'
+                    }
+                })
+                return r
+            }],
+            ['繼承getter(類別)', (c) => {
+                class R {
+                    constructor() {
+                        this.name = 'n3'
+                    }
+
+                    get id() {
+                        c.n++; this.meta = JSON.parse('{"__proto__":{"polluted":1}}'); return 'a3'
+                    }
+                }
+                return new R()
+            }],
+        ]) {
+            for (let [mode, mk] of [
+                ['insert', (r) => [r]],
+                ['save', (r) => [r]],
+                ['mix', (r) => ({ add: [r] })],
+                ['mix', (r) => ({ diff: [r] })],
+            ]) {
+                await reseed()
+                let c = { n: 0 }
+                await quiet(() => proc(mode, mk(mkWithCounter(c))))
+                assert.strictEqual(c.n, 0, `${mode} ${lab}: getter不被執行`)
+                assert.ok(!hasProtoKey(await rows()), `${mode} ${lab}: 表內無自有__proto__鍵`)
+            }
+        }
+        //null原型之品牌物件(Map)於多筆批次: 整批reject, 表不變(直呼真ORM則寫入垃圾列, 本層以fail-closed拒收, 非模仿直呼)
+        for (let mode of ['insert', 'save']) {
+            await reseed()
+            let before = await rows()
+            let err = await getReject(proc(mode, [{ id: 'ok1', name: 'ok' }, Object.setPrototypeOf(new Map([['id', 'a1']]), null)]))
+            assert.strictEqual(err, `failed to ${mode} data, ${msgIrreg}: data[1]`, mode)
+            same(await rows(), before, `${mode} 表不變`)
+        }
+    })
+
+    it('A27b mix同鍵: 不可列舉/繼承之id不誤拒, 結果同直呼真ORM依序insert、del; 自有同鍵仍reject; mix.del列之id為getter整批reject, 表不變(B-02 ④、F6)', async function() {
+        //R-MIX-01 規則1、6; 修前: 不可列舉之 add id 'a1' 與 del 'a1' 被誤拒; del 列 id 為 getter 時 add 之 a7 隨即被後端刪除而resolve
+        //自有不可列舉: 直呼真ORM之lodash cloneDeep不複製不可列舉鍵, 新增列得到產生之主鍵, 同本層(以直呼為預言機)
+        await reseed()
+        await so.woItems.tabA.insert([hideProp({ name: 'new' }, 'id', 'a1')])
+        await so.woItems.tabA.del([{ id: 'a1' }])
+        let direct = await snap()
+        await reseed()
+        await quiet(() => proc('mix', { add: [hideProp({ name: 'new' }, 'id', 'a1')], del: [{ id: 'a1' }] }))
+        same(await snap(), direct, '不可列舉: 表內容同直呼(新增列補主鍵、a1被刪)')
+        assert.ok((await rows()).every((v) => v.id !== 'a1'), '不可列舉: a1已刪')
+        //繼承: 真ORM於邏輯上讀到原型上之id(直呼時視為已存在而略過),與本層「只認自有可列舉」不同, 不以直呼為預言機; 本層視為未提供, 新增列補主鍵, a1被刪
+        await reseed()
+        await quiet(() => proc('mix', { add: [Object.assign(Object.create({ id: 'a1' }), { name: 'new' })], del: [{ id: 'a1' }] }))
+        let after = await rows()
+        assert.ok(after.every((v) => v.id !== 'a1'), '繼承: a1已刪')
+        assert.strictEqual(after.filter((v) => v.name === 'new').length, 1, '繼承: 新增列已寫入')
+        assert.ok(after.find((v) => v.name === 'new').id.length > 30, '繼承: 新增列補主鍵')
+        await reseed()
+        let before = await rows()
+        assert.strictEqual(await getReject(proc('mix', { add: [{ id: 'a1', name: 'new' }], del: [{ id: 'a1' }] })), 'invalid input of mix, same id in add and del: add[0], del[0]')
+        same(await rows(), before, '自有可列舉同鍵: 表不變')
+        //mix.del 列 id 為 getter: 前3次讀回 'x', 其後讀回 'a7'(add 同批新增 a7)——修前 add 之 a7 被刪
+        let n = 0
+        let delRow = {
+            get id() {
+                n++; return n <= 3 ? 'x' : 'a7'
+            }
+        }
+        let err = await getReject(proc('mix', { add: [{ id: 'a7', name: 'added' }], del: [delRow] }))
+        assert.strictEqual(err, 'failed to delete data, unsupported irregular object or array: data[0]')
+        assert.strictEqual(n, 0, 'getter不被執行')
+        same(await rows(), before, 'mix.del getter: 表不變(修前 a7 新增後被刪, resolve)')
+    })
+
+    it('A28 批次容器(偽造標籤之類陣列、空洞+原型帶索引)與共用子結構、稀疏巨陣列: 固定字串reject, 表不變, delAll不刪(F5、A-07)', async function() {
+        //R-OBJ-01 規則5續、規則7 ③⑤; 建議檔驗證 #4(delAll 不得因此刪全表)
+        await reseed()
+        let before = await rows()
+        //F5: 繞過規則3之容器形狀(修前含巢狀自有__proto__之列被寫入)
+        let fakeTag = () => ({ [Symbol.toStringTag]: 'Array', length: 1, 0: evilRow() })
+        let holeInherited = () => Object.setPrototypeOf(new Array(1), { 0: evilRow() })
+        for (let [lab, mk, want] of [
+            ['偽造標籤之類陣列', fakeTag, (m) => `failed to ${m} data, ${msgIrreg}: data[0]`],
+            ['空洞且原型帶索引', holeInherited, (m) => `failed to ${m} data, unsupported sparse array: data[0]`],
+        ]) {
+            for (let mode of ['insert', 'save']) {
+                assert.strictEqual(await getReject(proc(mode, mk())), want(mode), `${lab} ${mode}`)
+                same(await rows(), before, `${lab} ${mode} 表不變`)
+            }
+        }
+        assert.strictEqual(await getReject(proc('mix', { add: holeInherited() })), 'failed to insert data, unsupported sparse array: data[0]')
+        assert.strictEqual(await getReject(proc('mix', { add: fakeTag() })), 'invalid input of mix, need the result object of ltdtDiffByKey')
+        same(await rows(), before, 'mix 表不變')
+
+        //稀疏巨陣列: 列內巢狀、批次容器、find之$in(先有限大小)
+        for (let len of [1e5, 2 ** 32 - 1]) {
+            for (let [lab, mode, input, want] of [
+                ['列內巢狀', 'insert', [{ id: 'a9', arr: new Array(len) }], 'failed to insert data, unsupported sparse array: data[0]'],
+                ['容器 save', 'save', new Array(len), 'failed to save data, unsupported sparse array: data[0]'],
+                ['容器 del', 'del', new Array(len), 'failed to delete data, unsupported sparse array: data[0]'],
+                ['find $in select', 'select', { id: { $in: new Array(len) } }, `invalid find of select, ${msgIrreg}`],
+                ['find $in delAll', 'delAll', { id: { $in: new Array(len) } }, `invalid find of delAll, ${msgIrreg}`],
+            ]) {
+                let t = Date.now()
+                assert.strictEqual(await getReject(proc(mode, input)), want, `${lab} len=${len}`)
+                assert.ok(Date.now() - t < 1000, `${lab} len=${len} 耗時 ${Date.now() - t} ms`)
+                same(await rows(), before, `${lab} len=${len} 表不變`)
+            }
+        }
+
+        //共用子結構(字串型主鍵表, 經castIdFind): 最長路徑逾64、展開逾100,000 → 固定字串reject, 不展開、不呼叫真ORM; delAll後表不變
+        let leaf = () => ({ id: 'a1' })
+        let chainDag = (n) => {
+            let ns = new Array(n + 1)
+            ns[n] = leaf()
+            for (let i = n - 1; i >= 0; i--) {
+                ns[i] = { $and: [ns[i + 1]] }
+            }
+            return { $or: ns.slice(0, n) }
+        }
+        let expDag = (k) => {
+            let x = leaf()
+            for (let i = 0; i < k; i++) {
+                x = { $and: [x, x] }
+            }
+            return x
+        }
+        for (let [lab, mk, want] of [
+            ['鏈狀DAG 最長路徑129個容器', () => chainDag(63), 'too deep'],
+            ['鏈狀DAG 最長路徑403個容器', () => chainDag(200), 'too deep'],
+            ['指數DAG k=16 展開196,606個容器', () => expDag(16), 'too large'],
+            ['指數DAG k=20 展開4,194,302個容器', () => expDag(20), 'too large'],
+            ['循環', () => {
+                let c = { $and: [] }
+                c.$and.push(c)
+                return c
+            }, 'too deep'],
+        ]) {
+            for (let mode of ['select', 'delAll']) {
+                let t = Date.now()
+                assert.strictEqual(await getReject(proc(mode, mk())), `invalid find of ${mode}, ${want}`, `${lab} ${mode}`)
+                assert.ok(Date.now() - t < 1000, `${lab} ${mode} 耗時 ${Date.now() - t} ms`)
+                same(await rows(), before, `${lab} ${mode} 表不變(delAll不刪)`)
+            }
+        }
+
+        //合理之重用(同一子條件於多處)照常: 經procOrm之delAll刪除之列同直呼真ORM
+        let shared = { id: 'a1' }
+        await reseed()
+        await so.woItems.tabA.delAll({ $or: [{ id: 'a1' }, { id: 'a1' }] })
+        let direct = await rows()
+        await reseed()
+        await proc('delAll', { $or: [shared, shared] })
+        same(await rows(), direct, '重用同一子條件之delAll同直呼')
+        assert.strictEqual(direct.length, 4, '只刪a1')
+    })
+
+    it('A29 通過檢查之後不執行使用端程式(外審 sol 第一輪 F01、F03、F04): 批次容器索引為getter(每次回傳不同列)、del列之其他getter改動add/diff、DTO原型上之稽核欄位setter改寫id——真lowdb之結果須為預期, 表不變或僅依預期變動', async function() {
+        //R-OBJ-01 規則7、R-MIX-01 規則6; 修前: ①mix.del 容器索引getter第1次讀回{id:other}通過mix.del檢查、其後讀回繼承id=a7之列而被後端刪除剛新增之a7(表內無a7);
+        //②稽核欄位setter於同鍵檢查之後把新增列之id由new改為keep, insert因已存在而略過、隨後del刪除既有keep(表內兩者皆無)
+        await reseed()
+        let before = await rows()
+        //①
+        let n = 0
+        let dels = Object.defineProperty([], 0, {
+            enumerable: true,
+            get() {
+                n++
+                return n === 1 ? { id: 'other' } : Object.create({ id: 'a7' })
+            },
+        })
+        let err = await getReject(proc('mix', { add: [{ id: 'a7', name: 'new' }], del: dels }))
+        assert.strictEqual(err, 'failed to delete data, unsupported accessor property: data[0]')
+        assert.strictEqual(n, 0, 'index getter不被執行')
+        same(await rows(), before, '①表不變(修前 a7 新增後被刪)')
+        //②: 另建含稽核欄位之表(獨立資料檔)
+        let fd2 = './test/_tmp/api-objcopy-audit'
+        fs.rmSync(fd2, { recursive: true, force: true })
+        fs.mkdirSync(fd2, { recursive: true })
+        let ds2 = { tabA: { keys: ['id', 'name', 'meta', 'userId', 'timeCreate', 'userIdUpdate', 'timeUpdate'], settings: { id: { pk: true, type: 'STRING' }, name: { type: 'STRING' } } } }
+        let so2 = WServOrm(ds2, WOrm, `${fd2}/db.json`, 'worm')
+        try {
+            let reads = 0
+            class Dto {
+                constructor() {
+                    this.id = 'new'
+                    this.name = 'replacement'
+                }
+
+                set userIdUpdate(v) { // eslint-disable-line accessor-pairs
+                    reads++
+                    this.id = 'keep'
+                }
+            }
+            await so2.woItems.tabA.insert([{ id: 'keep', name: 'valuable' }])
+            await quiet(() => so2.procOrm('u1', 'tabA', 'mix', { add: [new Dto()], del: [{ id: 'keep' }] }))
+            assert.strictEqual(reads, 0, '原型setter不被執行')
+            let rs = await so2.woItems.tabA.select()
+            same(rs.map((v) => v.id), ['new'], '②新增列以id=new寫入、依請求刪除keep(修前兩者皆無)')
+            assert.strictEqual(rs[0].name, 'replacement')
+            assert.strictEqual(rs[0].userIdUpdate, 'u1', '稽核欄位已寫入')
+        }
+        finally {
+            await so2.closeAll()
+            fs.rmSync(fd2, { recursive: true, force: true })
+        }
+    })
+
 })

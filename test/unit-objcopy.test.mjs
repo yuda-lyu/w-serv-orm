@@ -375,11 +375,13 @@ describe('R-OBJ-01 規則3 自有__proto__鍵 fail-closed', function() {
             ['巢狀getter', () => ({ id: 'a', meta: getter({}, 'k', () => 1) }), 'unsupported accessor property'],
             ['陣列內物件之getter', () => ({ id: 'a', list: [getter({}, 'k', () => 1)] }), 'unsupported accessor property'],
             ['getter回傳含__proto__之物件', () => getter({ id: 'a' }, 'meta', () => parse('{"__proto__":1}')), 'unsupported accessor property'],
+            //規則7 ②(第82項)起寫入列頂層之Proxy一律 irregular reject 且不觸發任何陷阱(原 unreadable value, 陷阱被執行後才拋錯); 以 reads 斷言陷阱0次
             ['ownKeys陷阱拋錯', () => new Proxy({ id: 'a' }, {
                 ownKeys() {
+                    reads++
                     throw new Error('SECRET-TRAP')
                 }
-            }), 'unreadable value'],
+            }), 'unsupported irregular object or array'],
         ]
         for (let { kind, proc } of getKinds()) {
             if (kind === 'none') {
@@ -1389,28 +1391,34 @@ describe('R-ERR-01 規則5 邊界保證: mapOrm 之非字串例外一律轉為�
         assert.deepStrictEqual(calls, [], 'ORM不應被呼叫')
     })
 
-    it('C02 寫入列為已撤銷之Proxy或get陷阱拋錯之Proxy: 以固定字串reject, 不轉出拋出之值', async function() {
+    it('C02 寫入列為已撤銷之Proxy或get陷阱拋錯之Proxy: 以固定字串reject, 不轉出拋出之值, 陷阱不被執行', async function() {
         //R-ERR-01 規則5(外審 opus 二輪 F3): isobj 讀 Symbol.toStringTag 即拋錯, 在 getReasonBadKey 之 try 之外
+        //規則7 ②(第82項)起: 頂層列為Proxy(含已撤銷者)以 types.isProxy 判斷(不觸發陷阱), 一律 irregular reject(原為邊界保證之 failed to process input, 且 get 陷阱先被執行而拋錯)
+        let trapReads = 0
         let revoked = Proxy.revocable({ id: 'x' }, {})
         revoked.revoke()
         let mkTrap = () => new Proxy({ id: 'x' }, {
             get() {
+                trapReads++
                 throw new Error('SECRET-TRAP')
             },
         })
+        let IRREG = 'unsupported irregular object or array'
         for (let { kind, proc } of getKinds()) {
             if (kind === 'none') {
                 continue
             }
             let rj = (mode, input) => quiet(() => getReject(proc('u1', 'tests', mode, input)))
-            for (let mk of [() => revoked.proxy, mkTrap]) {
-                assert.strictEqual(await rj('insert', [mk()]), FIXED, `${kind} insert`)
-                assert.strictEqual(await rj('insert', mk()), FIXED, `${kind} insert 單一`)
-                assert.strictEqual(await rj('save', [mk()]), FIXED, `${kind} save`)
-                assert.strictEqual(await rj('mix', { add: [mk()] }), FIXED, `${kind} mix.add`)
-                assert.strictEqual(await rj('mix', { diff: [mk()] }), FIXED, `${kind} mix.diff`)
+            //單一輸入為已撤銷之Proxy時無法分類為陣列或單一列(Array.isArray拋TypeError), 於讀取與ORM呼叫之前以容器層之固定訊息拒收(無位置); 未撤銷者仍為列層之 data[0]
+            for (let [mk, single] of [[() => revoked.proxy, `failed to insert data, ${IRREG}`], [mkTrap, `failed to insert data, ${IRREG}: data[0]`]]) {
+                assert.strictEqual(await rj('insert', [mk()]), `failed to insert data, ${IRREG}: data[0]`, `${kind} insert`)
+                assert.strictEqual(await rj('insert', mk()), single, `${kind} insert 單一`)
+                assert.strictEqual(await rj('save', [mk()]), `failed to save data, ${IRREG}: data[0]`, `${kind} save`)
+                assert.strictEqual(await rj('mix', { add: [mk()] }), `failed to insert data, ${IRREG}: data[0]`, `${kind} mix.add`)
+                assert.strictEqual(await rj('mix', { diff: [mk()] }), `failed to update data, ${IRREG}: data[0]`, `${kind} mix.diff`)
             }
         }
+        assert.strictEqual(trapReads, 0, '陷阱不應被執行')
         assert.deepStrictEqual(calls, [], 'ORM不應被呼叫')
     })
 
@@ -1438,8 +1446,9 @@ describe('R-ERR-01 規則5 邊界保證: mapOrm 之非字串例外一律轉為�
         }
     })
 
-    it('C04 循環或鏈狀共用子結構之find使遞迴爆堆疊: 以固定字串reject(循環: 字串型主鍵表, 其餘表型態原樣交ORM; 鏈狀共用: 所有表型態皆由規則6之品牌網reject)', async function() {
-        //R-ERR-01 規則5、R-OBJ-01 已知限制(外審 opus 二輪 F4): 深度檢查不涵蓋共用子結構, 由邊界保證兜底
+    it('C04 循環或鏈狀共用子結構之find(原使遞迴爆堆疊): 所有表型態皆以固定字串 too deep reject, ORM未被呼叫', async function() {
+        //R-ERR-01 規則5、R-OBJ-01 規則5續(第82項): 原深度檢查不涵蓋共用子結構, 循環於字串型主鍵表由邊界保證轉為 failed to process input、其餘表型態原樣交ORM,
+        //鏈狀共用由規則6之品牌網以 irregular reject; 現由 measureFind 於所有表型態判定最長路徑(含循環), 預期隨之更新(只改訊息預期與循環之非字串型表, 不放寬)
         let cyc = { $and: [] }
         cyc.$and.push(cyc)
         let shared = { id: 1 }
@@ -1450,25 +1459,14 @@ describe('R-ERR-01 規則5 邊界保證: mapOrm 之非字串例外一律轉為�
         }
         //由短到長依序被 getReasonBadKey 彈出(堆疊後進先出, 故陣列內長者排前): 每個 $and 節點皆經根之 $or 以第 3 層先被走到, 檢查所見最大深度僅 5, 實際最長路徑約 1e4 個容器
         let dag = { $or: [...chain].reverse() }
-        for (let { kind, cast, proc } of getKinds()) {
+        for (let { kind, proc } of getKinds()) {
             for (let mode of ['select', 'delAll']) {
                 for (let [label, find] of [['循環', cyc], ['鏈狀共用', dag]]) {
                     stub.reset()
-                    if (label === '鏈狀共用') {
-                        //規則6: 最長路徑約1e4個容器, 遠超結構化複製之遞迴上限(Node 24.19.0 實測約1576個容器, 與冷熱無關), 品牌網於複製前即以固定字串reject, 所有資料表型態皆然
-                        let err = await quiet(() => getReject(proc('u1', 'tests', mode, find)))
-                        assert.strictEqual(err, `invalid find of ${mode}, unsupported irregular object or array`, `${kind} ${mode} ${label}`)
-                        assert.strictEqual(calls.length, 0, `${kind} ${mode} ${label} ORM不應被呼叫`)
-                    }
-                    else if (cast) {
-                        let err = await quiet(() => getReject(proc('u1', 'tests', mode, find)))
-                        assert.strictEqual(err, FIXED, `${kind} ${mode} ${label}`)
-                        assert.strictEqual(calls.length, 0, `${kind} ${mode} ${label} ORM不應被呼叫`)
-                    }
-                    else {
-                        await proc('u1', 'tests', mode, find)
-                        assert.strictEqual(calls.length, 1, `${kind} ${mode} ${label} 原樣交ORM`)
-                    }
+                    //最長路徑約1e4個容器(鏈狀共用)或無限(循環), 皆超過64個容器層: measureFind 於結構化複製與castIdFind之前以固定字串reject, 所有資料表型態皆然
+                    let err = await quiet(() => getReject(proc('u1', 'tests', mode, find)))
+                    assert.strictEqual(err, `invalid find of ${mode}, too deep`, `${kind} ${mode} ${label}`)
+                    assert.strictEqual(calls.length, 0, `${kind} ${mode} ${label} ORM不應被呼叫`)
                 }
             }
         }
@@ -1507,6 +1505,1504 @@ describe('R-INPUT-01 規則5 getWoItems 以自有屬性建表', function() {
         await so.procOrm('u1', '__proto__', 'select', { name: 'x' })
         await so.procOrm('u1', 'tests', 'select', { name: 'x' })
         assert.strictEqual(calls.length, 2)
+    })
+
+})
+
+
+//R-OBJ-01 規則7(第82項, Argon 外審第三輪 B-02 與核實時另發現之 F5、F6): 寫入列與批次容器——檢查之值即使用之值, 且不執行使用端程式
+//預言機為手寫預期(依規則7各句), 不取自被測函式之回傳; 僅替身ORM(接真ORM見 api-objcopy A27、A28)
+describe('R-OBJ-01 規則7 寫入列之id只認自有可列舉資料屬性、頂層列之乾淨判準(S01、S02)', function() {
+
+    beforeEach(function() {
+        stub.reset()
+    })
+
+    let hide = (o, k, v) => Object.defineProperty(o, k, { value: v, enumerable: false, configurable: true, writable: true })
+    let KINDS = ['str', 'unknown', 'int'] //寫入與del之路徑不含 none(ds無該表, 寫入於adjustData拋錯)
+    let ENTRIES = ['insert', 'save', 'mix.add', 'mix.diff', 'del', 'mix.del']
+    let msgWrite = { 'insert': 'failed to insert data', 'save': 'failed to save data', 'mix.add': 'failed to insert data', 'mix.diff': 'failed to update data' }
+    let run = (proc, entry, row) => {
+        switch (entry) {
+        case 'insert': return proc('u1', 'tests', 'insert', [row])
+        case 'save': return proc('u1', 'tests', 'save', [row])
+        case 'mix.add': return proc('u1', 'tests', 'mix', { add: [row] })
+        case 'mix.diff': return proc('u1', 'tests', 'mix', { diff: [row] })
+        case 'del': return proc('u1', 'tests', 'del', [row])
+        case 'mix.del': return proc('u1', 'tests', 'mix', { del: [row] })
+        }
+        throw new Error(`entry ${entry}`)
+    }
+    let firstRow = () => {
+        let d = calls[0].data
+        return Array.isArray(d) ? d[0] : d
+    }
+    let hasOwn = (o, k) => Object.prototype.hasOwnProperty.call(o, k)
+
+    //id形態表: w=寫入列(insert、save、mix.add、mix.diff), d=del, md=mix.del 之預期
+    //  w: 'keep'=ORM收到之自有id同送入者; 'cast'=字串型/未知型表轉為字串(整數型表原數字); 'gen'=視為未提供(字串型/未知型表補主鍵, 整數型表無自有id); 'rej:<原因>'=整批reject
+    //  d: 'ref'=ORM收到之列即送入之同一物件(本層不轉型亦不複製); 'cast'=字串型/未知型表複製並轉為字串, 整數型表同ref; null=不測(Proxy之del列交後端, 屬既有)
+    //  md: 'ok'=通過且本層不轉型(同d之'ref'); 'cast'=通過且字串型/未知型表轉字串(同d之'cast'); 'rej'=整批reject
+    let forms = () => [
+        { k: 'F01', label: '自有可列舉字串id', mk: () => ({ row: { id: 'a1', name: 'x' } }), w: 'keep', d: 'ref', md: 'ok' },
+        { k: 'F02', label: '自有可列舉有限數字id', mk: () => ({ row: { id: 123, name: 'x' } }), w: 'cast', d: 'cast', md: 'cast' },
+        { k: 'F04', label: '自有不可列舉字串id', mk: () => ({ row: hide({ name: 'x' }, 'id', 'a1') }), w: 'gen', d: 'ref', md: 'rej' },
+        { k: 'F05', label: '自有不可列舉數字id(修前被「復活」為可列舉字串id)', mk: () => ({ row: hide({ name: 'x' }, 'id', 123) }), w: 'gen', d: 'ref', md: 'rej' },
+        { k: 'F06', label: '繼承字串id(Object.create)', mk: () => ({ row: Object.assign(Object.create({ id: 'a1' }), { name: 'x' }) }), w: 'gen', d: 'ref', md: 'rej' },
+        { k: 'F07', label: '繼承數字id(修前被「復活」為可列舉字串id)', mk: () => ({ row: Object.assign(Object.create({ id: 123 }), { name: 'x' }) }), w: 'gen', d: 'ref', md: 'rej' },
+        {
+            k: 'F08',
+            label: '自有可列舉存取器id',
+            mk: () => {
+                let c = { n: 0 }
+                let row = { name: 'x' }
+                Object.defineProperty(row, 'id', {
+                    enumerable: true,
+                    get() {
+                        c.n++; return 'a1'
+                    }
+                })
+                return { row, c }
+            },
+            w: 'rej:unsupported accessor property',
+            d: 'ref',
+            md: 'rej'
+        },
+        {
+            k: 'F09',
+            label: '自有不可列舉存取器id',
+            mk: () => {
+                let c = { n: 0 }
+                let row = { name: 'x' }
+                Object.defineProperty(row, 'id', {
+                    enumerable: false,
+                    get() {
+                        c.n++; return 'a1'
+                    }
+                })
+                return { row, c }
+            },
+            w: 'gen',
+            d: 'ref',
+            md: 'rej'
+        },
+        {
+            k: 'F10',
+            label: '繼承存取器id(類別getter)',
+            mk: () => {
+                let c = { n: 0 }
+                class R {
+                    constructor() {
+                        this.name = 'x'
+                    }
+
+                    get id() {
+                        c.n++; return 'a1'
+                    }
+                }
+                return { row: new R(), c }
+            },
+            w: 'gen',
+            d: 'ref',
+            md: 'rej'
+        },
+        { k: 'F11', label: 'null原型列、自有id', mk: () => ({ row: Object.assign(Object.create(null), { id: 'a1', name: 'x' }) }), w: 'keep', d: 'ref', md: 'ok' },
+        {
+            k: 'F12',
+            label: 'Proxy列(計數陷阱)',
+            mk: () => {
+                let c = { n: 0 }
+                let row = new Proxy({ id: 'a1', name: 'x' }, {
+                    get(t, k, r) {
+                        c.n++; return Reflect.get(t, k, r)
+                    },
+                    getOwnPropertyDescriptor(t, k) {
+                        c.n++; return Reflect.getOwnPropertyDescriptor(t, k)
+                    },
+                    ownKeys(t) {
+                        c.n++; return Reflect.ownKeys(t)
+                    },
+                    has(t, k) {
+                        c.n++; return Reflect.has(t, k)
+                    },
+                })
+                return { row, c }
+            },
+            w: 'rej:unsupported irregular object or array',
+            d: null,
+            md: 'rej'
+        },
+        { k: 'F13', label: 'null原型之Map(品牌物件, 無標籤可辨)', mk: () => ({ row: Object.setPrototypeOf(new Map([['id', 'a1']]), null) }), w: 'rej:unsupported irregular object or array', d: 'ref', md: 'ok' },
+        { k: 'F14', label: '列自有Symbol.toStringTag', mk: () => ({ row: { id: 'a1', name: 'x', [Symbol.toStringTag]: 'X' } }), w: 'rej:unsupported irregular object or array', d: 'ref', md: 'rej' },
+    ]
+
+    it('S01 列之id形態 x 六個入口 x 三種資料表型態: id只認自有可列舉資料屬性, getter與陷阱0次, 不改呼叫端物件(B-02 ①②④、F6)', async function() {
+        //規則7 ①②; R-ID-02 規則4續; R-MIX-01 規則6
+        let done = 0
+        let fs0 = forms()
+        for (let { kind, proc } of getKinds().filter((v) => KINDS.includes(v.kind))) {
+            let cast = kind !== 'int'
+            for (let f of fs0) {
+                for (let entry of ENTRIES) {
+                    stub.reset()
+                    let { row, c } = f.mk()
+                    let label = `${kind} ${f.k}(${f.label}) ${entry}`
+                    let isW = entry.startsWith('insert') || entry === 'save' || entry.startsWith('mix.a') || entry === 'mix.diff'
+                    let exp = isW ? f.w : entry === 'del' ? f.d : f.md
+                    if (exp === null) {
+                        continue //Proxy之del列交後端(R-INPUT-01 規則2), 屬既有行為, 不測
+                    }
+                    let before = Reflect.ownKeys(row).length
+                    if (c) {
+                        c.n = 0 //上一行對Proxy取ownKeys是測試自己的讀取, 不計入
+                    }
+                    if (typeof exp === 'string' && exp.startsWith('rej')) {
+                        let msg = isW ? `${msgWrite[entry]}, ${exp.slice(4)}: data[0]` : exp === 'rej' ? 'failed to delete data, unsupported irregular object or array: data[0]' : null
+                        let err = await quiet(() => getReject(run(proc, entry, row)))
+                        assert.strictEqual(err, msg, label)
+                        assert.deepStrictEqual(calls, [], `${label} ORM不應被呼叫`)
+                    }
+                    else {
+                        await quiet(() => run(proc, entry, row))
+                        assert.strictEqual(calls.length, 1, `${label} ORM被呼叫一次`)
+                        let got = firstRow()
+                        if (isW) {
+                            let want = { keep: 'a1', cast: cast ? '123' : 123 }[exp]
+                            if (exp === 'gen') {
+                                if (cast) {
+                                    assert.ok(isGen(got.id), `${label} 補主鍵, 實收 ${String(got.id)}`)
+                                }
+                                else {
+                                    assert.ok(!hasOwn(got, 'id'), `${label} 整數型主鍵表不補值`)
+                                }
+                            }
+                            else {
+                                assert.strictEqual(got.id, want, `${label} id`)
+                            }
+                            assert.strictEqual(Object.getPrototypeOf(got), Object.prototype, `${label} 寫入複本為一般物件`)
+                            assert.ok(got !== row, `${label} 寫入複本非呼叫端物件`)
+                            assert.strictEqual(got.name, 'x', `${label} 他欄不變`)
+                        }
+                        else if (exp === 'cast' && cast) {
+                            assert.ok(got !== row, `${label} 複製`)
+                            assert.strictEqual(got.id, '123', `${label} 轉字串`)
+                            assert.strictEqual(row.id, 123, `${label} 不改呼叫端物件`)
+                        }
+                        else {
+                            assert.ok(got === row, `${label} 本層不轉型亦不複製(同一參考)`)
+                        }
+                    }
+                    if (c) {
+                        assert.strictEqual(c.n, 0, `${label} getter/陷阱次數`)
+                    }
+                    assert.strictEqual(Reflect.ownKeys(row).length, before, `${label} 不改呼叫端物件`)
+                    done++
+                }
+            }
+        }
+        assert.strictEqual(done, 3 * (13 * 6 - 1), '完成數(3表型態 x 13形態 x 6入口, 扣掉Proxy之del列)')
+    })
+
+    it('S01b 存取器id於檢查通過後才被執行並向列加入含自有__proto__之欄位(B-02 ②原重現): getter不被執行, 該欄位不被寫入', async function() {
+        //規則7 ①②; 修前: 字串型表getter被執行2次(mix 3次)、整數型表1次(mix 2次), 列內meta含自有__proto__被送到ORM
+        let mkOwn = (c) => {
+            let r = { name: 'n3' }
+            Object.defineProperty(r, 'id', {
+                enumerable: false,
+                get() {
+                    c.n++; r.meta = parse('{"__proto__":{"polluted":1}}'); return 'a3'
+                }
+            })
+            return r
+        }
+        let mkInherited = (c) => {
+            class R {
+                constructor() {
+                    this.name = 'n3'
+                }
+
+                get id() {
+                    c.n++; this.meta = parse('{"__proto__":{"polluted":1}}'); return 'a3'
+                }
+            }
+            return new R()
+        }
+        let done = 0
+        for (let { kind, proc } of getKinds().filter((v) => KINDS.includes(v.kind))) {
+            for (let [lab, mk] of [['自有不可列舉getter', mkOwn], ['繼承getter', mkInherited]]) {
+                for (let entry of ['insert', 'save', 'mix.add', 'mix.diff']) {
+                    stub.reset()
+                    let c = { n: 0 }
+                    let row = mk(c)
+                    await quiet(() => run(proc, entry, row))
+                    assert.strictEqual(c.n, 0, `${kind} ${lab} ${entry} getter不被執行`)
+                    assert.strictEqual(calls.length, 1, `${kind} ${lab} ${entry}`)
+                    assert.ok(!hasOwn(firstRow(), 'meta'), `${kind} ${lab} ${entry} getter內加入之欄位不被寫入`)
+                    done++
+                }
+            }
+        }
+        assert.strictEqual(done, 3 * 2 * 4, '完成數')
+    })
+
+    it('S02 頂層列為Proxy、帶標籤、內建品牌物件(原型改為null): 整批reject並列位置, 陷阱0次, 與其他原因分組; 類別實例DTO、Object.create、跨realm、null原型之列照收(Q1(a))', async function() {
+        //規則7 ②及其與find(strict)之差異; 修前: null原型之Map等通過並被mapOwn洗成{}而寫入垃圾列, Proxy列之陷阱被執行14~17次
+        let nul = (o) => Object.setPrototypeOf(o, null)
+        let c = { n: 0 }
+        let mkProxy = () => new Proxy({ id: 'p', name: 'x' }, {
+            get(t, k, r) {
+                c.n++; return Reflect.get(t, k, r)
+            },
+            getOwnPropertyDescriptor(t, k) {
+                c.n++; return Reflect.getOwnPropertyDescriptor(t, k)
+            },
+            ownKeys(t) {
+                c.n++; return Reflect.ownKeys(t)
+            },
+            has(t, k) {
+                c.n++; return Reflect.has(t, k)
+            },
+            getPrototypeOf(t) {
+                c.n++; return Reflect.getPrototypeOf(t)
+            },
+        })
+        let bads = [
+            ['Proxy', mkProxy],
+            ['自有標籤', () => ({ id: 'p', [Symbol.toStringTag]: 'X' })],
+            ['原型上之標籤', () => Object.assign(Object.create(Object.assign(Object.create(null), { [Symbol.toStringTag]: 'X' })), { id: 'p' })],
+            ['Map(null原型)', () => nul(new Map([['id', 'p']]))],
+            ['Set(null原型)', () => nul(new Set([1]))],
+            ['WeakMap(null原型)', () => nul(new WeakMap())],
+            ['Promise(null原型)', () => nul(Promise.resolve(1))],
+            ['ArrayBuffer(null原型)', () => nul(new ArrayBuffer(2))],
+            ['DataView(null原型)', () => nul(new DataView(new ArrayBuffer(2)))],
+            ['Uint8Array(null原型)', () => nul(new Uint8Array(2))],
+        ]
+        let done = 0
+        for (let { kind, proc } of getKinds().filter((v) => KINDS.includes(v.kind))) {
+            for (let [lab, mk] of bads) {
+                let L = `${kind} ${lab}`
+                let rj = (mode, input) => quiet(() => getReject(proc('u1', 'tests', mode, input)))
+                for (let [mode, mk2, msg] of [
+                    ['insert', (r) => [r], 'failed to insert data'],
+                    ['save', (r) => [r], 'failed to save data'],
+                    ['insert', (r) => r, 'failed to insert data'], //單一物件輸入
+                    ['mix', (r) => ({ add: [r] }), 'failed to insert data'],
+                    ['mix', (r) => ({ diff: [{ id: 'ok' }, r] }), 'failed to update data'],
+                ]) {
+                    stub.reset()
+                    c.n = 0
+                    let idx = mode === 'mix' && msg === 'failed to update data' ? 1 : 0
+                    assert.strictEqual(await rj(mode, mk2(mk())), `${msg}, unsupported irregular object or array: data[${idx}]`, `${L} ${mode} ${msg}`)
+                    assert.strictEqual(c.n, 0, `${L} 陷阱次數`)
+                    assert.deepStrictEqual(calls, [], `${L} ORM不應被呼叫`)
+                    done++
+                }
+                //多筆批次中之第2筆, 與其他原因分組(依首次出現之順序)
+                assert.strictEqual(await rj('insert', [{ id: 'ok' }, mk()]), 'failed to insert data, unsupported irregular object or array: data[1]', `${L} 第2筆`)
+                assert.strictEqual(await rj('insert', [mk(), parse('{"id":"q","__proto__":1}')]),
+                    'failed to insert data, unsupported irregular object or array: data[0]; failed to insert data, unsupported key[__proto__]: data[1]', `${L} 分組`)
+                done++
+            }
+        }
+        assert.strictEqual(done, 3 * 10 * 6, '完成數')
+
+        //差異(Q1(a)): 這些列照收, ORM收到自有可列舉鍵之複本(mapOwn), 與直呼後端一致
+        class Dto {
+            constructor() {
+                this.id = 'c1'
+                this.name = 'n'
+            }
+
+            method() {}
+        }
+        let vmObj = vm.runInNewContext('({ id: "v1", name: "n" })')
+        let accepts = [
+            ['類別實例DTO(含自有欄位)', () => new Dto(), { id: 'c1', name: 'n' }],
+            ['Object.create(proto)含自有欄位', () => Object.assign(Object.create({ inherited: 1 }), { id: 'o1', name: 'n' }), { id: 'o1', name: 'n' }],
+            ['跨realm(vm)之列', () => vmObj, { id: 'v1', name: 'n' }],
+            ['null原型之列', () => Object.assign(Object.create(null), { id: 'u1', name: 'n' }), { id: 'u1', name: 'n' }],
+            ['含Symbol鍵與不可列舉鍵之列(後端亦略過)', () => hide(Object.assign({ id: 's1', name: 'n' }, { [Symbol('s')]: 1 }), 'hid', 1), { id: 's1', name: 'n' }],
+        ]
+        for (let { kind, proc } of getKinds().filter((v) => KINDS.includes(v.kind))) {
+            for (let [lab, mk, expected] of accepts) {
+                stub.reset()
+                await quiet(() => proc('u1', 'tests', 'insert', [mk()]))
+                assert.strictEqual(calls.length, 1, `${kind} ${lab}`)
+                let got = firstRow()
+                assert.deepStrictEqual(Object.keys(got).sort(), Object.keys(expected).sort(), `${kind} ${lab} 鍵`)
+                assert.strictEqual(got.id, expected.id, `${kind} ${lab} id`)
+                assert.strictEqual(Object.getPrototypeOf(got), Object.prototype, `${kind} ${lab} 複本為本realm一般物件`)
+            }
+        }
+    })
+
+})
+
+
+describe('R-OBJ-01 規則7 批次容器(S03、S04)', function() {
+
+    beforeEach(function() {
+        stub.reset()
+    })
+
+    let KINDS = ['str', 'unknown', 'int']
+    let evil = () => parse('{"id":"zz","name":"e","meta":{"__proto__":{"polluted":1}}}') //列內含巢狀自有__proto__: 規則3須擋下
+    let okRow = () => ({ id: 'a1', name: 'x' })
+    let sp = (n) => new Array(n)
+    let rj = (proc, mode, input) => quiet(() => getReject(proc('u1', 'tests', mode, input)))
+    let elapsed = async (fn) => {
+        let t = Date.now()
+        let r = await fn()
+        return [r, Date.now() - t]
+    }
+
+    it('S03 批次容器為偽造標籤之類陣列、Proxy陣列、有空洞(含原型帶資料索引)、原型鏈有標籤: 整批reject, 繞過規則3之列不被寫入, length與陷阱0次(F5)', async function() {
+        //規則7 ③④; R-INPUT-01 規則1、2(批次容器); 修前: 偽造標籤與空洞+繼承索引兩形狀使含巢狀自有__proto__之列通過getMsgsBadKey並被送到ORM
+        let reads = 0
+        let counted = (target) => new Proxy(target, {
+            get(t, k, r) {
+                reads++; return Reflect.get(t, k, r)
+            },
+            has(t, k) {
+                reads++; return Reflect.has(t, k)
+            },
+            ownKeys(t) {
+                reads++; return Reflect.ownKeys(t)
+            },
+            getOwnPropertyDescriptor(t, k) {
+                reads++; return Reflect.getOwnPropertyDescriptor(t, k)
+            },
+        })
+        let fakeTag = () => ({
+            [Symbol.toStringTag]: 'Array',
+            get length() {
+                reads++; return 1
+            },
+            0: evil(),
+        })
+        let holeInherited = () => Object.setPrototypeOf(new Array(1), { 0: evil() })
+        //[標籤, 容器工廠, 寫入/del之訊息尾(含位置), mix段之訊息尾, 僅限insert與save(fakeTag於mix回既有之need..., 於del為單一列交後端)]
+        let containers = [
+            ['偽造標籤之類陣列', fakeTag, null],
+            ['Proxy陣列', () => counted([okRow(), okRow()]), 'unsupported irregular object or array'],
+            ['中間有空洞', () => [okRow(), , okRow()], 'unsupported sparse array: data[1]'], // eslint-disable-line no-sparse-arrays
+            ['全為空洞', () => sp(3), 'unsupported sparse array: data[0]'],
+            ['空洞且原型帶資料索引', holeInherited, 'unsupported sparse array: data[0]'],
+            ['原型鏈有標籤之陣列', () => Object.setPrototypeOf([okRow()], Object.assign(Object.create(Array.prototype), { [Symbol.toStringTag]: 'X' })), 'unsupported irregular object or array'],
+            //索引為存取器(可列舉或不可列舉): 其後各步驟以array[index]讀取會執行使用端程式並可每次回傳不同列(外審 sol F01); 由getErrBatch於讀取任何元素之前以描述子拒收, getter 0次
+            ['索引為可列舉存取器', () => Object.defineProperty([okRow()], 0, {
+                enumerable: true,
+                get() {
+                    reads++; return okRow()
+                }
+            }), 'unsupported accessor property: data[0]'],
+            ['索引為不可列舉存取器', () => Object.defineProperty([okRow()], 0, {
+                enumerable: false,
+                get() {
+                    reads++; return okRow()
+                }
+            }), 'unsupported accessor property: data[0]'],
+            //已撤銷之Proxy: Array.isArray拋TypeError, 無法分類為陣列或單一列, 於任何讀取與ORM呼叫之前固定拒收(外審 sol F06; mix之形狀檢查視為非陣列)
+            ['已撤銷之Proxy陣列', () => {
+                let rv = Proxy.revocable([okRow()], {}); rv.revoke(); return rv.proxy
+            }, 'unsupported irregular object or array', 'need'],
+        ]
+        let done = 0
+        for (let { kind, proc } of getKinds().filter((v) => KINDS.includes(v.kind))) {
+            for (let [lab, mk, tail, mixNeed] of containers) {
+                let L = `${kind} ${lab}`
+                reads = 0
+                //insert、save
+                for (let [mode, msg] of [['insert', 'failed to insert data'], ['save', 'failed to save data']]) {
+                    stub.reset()
+                    let err = await rj(proc, mode, mk())
+                    //偽造標籤者被視為單一列, 由頂層列檢查以irregular回報(其自有標籤使其不乾淨)
+                    assert.strictEqual(err, tail === null ? `${msg}, unsupported irregular object or array: data[0]` : `${msg}, ${tail}`, `${L} ${mode}`)
+                    assert.deepStrictEqual(calls, [], `${L} ${mode} ORM不應被呼叫`)
+                    done++
+                }
+                //del: 容器檢查適用; 偽造標籤者不被當陣列(原 isarr 為真而依其length迭代), 視為單一列交後端, length getter 0次
+                stub.reset()
+                if (tail !== null) {
+                    assert.strictEqual(await rj(proc, 'del', mk()), `failed to delete data, ${tail}`, `${L} del`)
+                    assert.deepStrictEqual(calls, [], `${L} del ORM不應被呼叫`)
+                }
+                else {
+                    let fake = mk()
+                    await quiet(() => proc('u1', 'tests', 'del', fake))
+                    assert.strictEqual(calls.length, 1, `${L} del 交後端一次`)
+                    assert.ok(calls[0].data === fake, `${L} del 以單一列(同一物件)交後端, 不展開為陣列`)
+                }
+                done++
+                //mix: add、del、diff 各為批次容器
+                for (let [key, msg] of [['add', 'failed to insert data'], ['del', 'failed to delete data'], ['diff', 'failed to update data']]) {
+                    stub.reset()
+                    let err = await rj(proc, 'mix', { [key]: mk() })
+                    assert.strictEqual(err, tail === null || mixNeed === 'need' ? 'invalid input of mix, need the result object of ltdtDiffByKey' : `${msg}, ${tail}`, `${L} mix.${key}`)
+                    assert.deepStrictEqual(calls, [], `${L} mix.${key} ORM不應被呼叫`)
+                    done++
+                }
+                assert.strictEqual(reads, 0, `${L} length getter與陷阱不被執行`)
+            }
+            //多段並列時以 '; ' 串接(add、del、diff之序)
+            stub.reset()
+            assert.strictEqual(await rj(proc, 'mix', { add: sp(2), del: [{ id: 'x' }], diff: [okRow(), , okRow()] }), // eslint-disable-line no-sparse-arrays
+                'failed to insert data, unsupported sparse array: data[0]; failed to update data, unsupported sparse array: data[1]', `${kind} mix多段`)
+            assert.deepStrictEqual(calls, [], `${kind} mix多段 ORM不應被呼叫`)
+            //對照(規則3不退化): 同一個含巢狀自有__proto__之列放在一般陣列, 仍以既有訊息reject
+            assert.strictEqual(await rj(proc, 'insert', [evil()]), 'failed to insert data, unsupported key[__proto__]: data[0]', `${kind} 對照`)
+            //對照: 一般之密陣列與空陣列照常
+            await quiet(() => proc('u1', 'tests', 'insert', [okRow(), okRow()]))
+            assert.strictEqual(calls.length, 1, `${kind} 一般密陣列照常`)
+            stub.reset()
+            await quiet(() => proc('u1', 'tests', 'insert', []))
+            assert.strictEqual(calls.length, 1, `${kind} 空陣列照舊交ORM(R-INPUT-01 規則1)`)
+        }
+        assert.strictEqual(done, 3 * ((9 * 2) + 9 + (9 * 3)), '完成數(3表型態 x (9容器 x insert/save + 9 x del + 9 x mix三段))')
+    })
+
+    it('S04 稀疏巨陣列(列內巢狀、批次容器 x 六個入口、find之$in): 立即reject, 不逐索引迴圈、不配置同數量之物件, ORM未被呼叫(A-07 ③)', async function() {
+        //規則7 ③⑤; 修前: 列內巢狀 1e8 個空洞15.8秒才resolve、2^32-1逾40秒未返回; 批次容器 1e7 個空洞配置606MB, 1e8 OOM
+        //有限大小先斷言(1e5): 若檢查被拿掉, 於此即失敗而不致掛住, 再跑極大值
+        let build = (len) => [
+            //[標籤, 入口, 輸入, 預期]
+            ['列內巢狀(陣列列)', 'insert', [{ id: 'a1', arr: sp(len) }], 'failed to insert data, unsupported sparse array: data[0]'],
+            ['列內巢狀(單一物件)', 'insert', { id: 'a1', arr: sp(len) }, 'failed to insert data, unsupported sparse array: data[0]'],
+            ['列內巢狀(save第2列)', 'save', [okRow(), { id: 'a2', deep: { arr: sp(len) } }], 'failed to save data, unsupported sparse array: data[1]'],
+            ['列內巢狀(第0個有值)', 'insert', [{ id: 'a1', arr: Object.assign(sp(len), { 0: 'x' }) }], 'failed to insert data, unsupported sparse array: data[0]'],
+            ['mix.add列內巢狀', 'mix', { add: [{ id: 'a1', arr: sp(len) }] }, 'failed to insert data, unsupported sparse array: data[0]'],
+            ['mix.diff列內巢狀', 'mix', { diff: [{ id: 'a1', arr: sp(len) }] }, 'failed to update data, unsupported sparse array: data[0]'],
+            ['容器 insert', 'insert', sp(len), 'failed to insert data, unsupported sparse array: data[0]'],
+            ['容器 save', 'save', sp(len), 'failed to save data, unsupported sparse array: data[0]'],
+            ['容器 del', 'del', sp(len), 'failed to delete data, unsupported sparse array: data[0]'],
+            ['容器 mix.add', 'mix', { add: sp(len) }, 'failed to insert data, unsupported sparse array: data[0]'],
+            ['容器 mix.del', 'mix', { del: sp(len) }, 'failed to delete data, unsupported sparse array: data[0]'],
+            ['容器 mix.diff', 'mix', { diff: sp(len) }, 'failed to update data, unsupported sparse array: data[0]'],
+        ]
+        let findCases = (len) => [
+            ['find $in', { id: { $in: sp(len) } }],
+            ['find 非id欄位$in', { name: { $in: sp(len) } }],
+            ['find 第0個有值', { id: { $in: Object.assign(sp(len), { 0: 'x' }) } }],
+        ]
+        let done = 0
+        for (let { kind, proc } of getKinds().filter((v) => KINDS.includes(v.kind))) {
+            for (let len of [1e5, 2 ** 32 - 1, 1e9]) {
+                for (let [lab, mode, input, expected] of build(len)) {
+                    stub.reset()
+                    let [err, ms] = await elapsed(() => rj(proc, mode, input))
+                    assert.strictEqual(err, expected, `${kind} ${lab} len=${len}`)
+                    assert.ok(ms < 1000, `${kind} ${lab} len=${len} 耗時 ${ms} ms`)
+                    assert.deepStrictEqual(calls, [], `${kind} ${lab} len=${len} ORM不應被呼叫`)
+                    done++
+                }
+                for (let mode of ['select', 'delAll']) {
+                    for (let [lab, find] of findCases(len)) {
+                        stub.reset()
+                        let [err, ms] = await elapsed(() => rj(proc, mode, find))
+                        assert.strictEqual(err, `invalid find of ${mode}, unsupported irregular object or array`, `${kind} ${mode} ${lab} len=${len}`)
+                        assert.ok(ms < 1000, `${kind} ${mode} ${lab} len=${len} 耗時 ${ms} ms`)
+                        assert.deepStrictEqual(calls, [], `${kind} ${mode} ${lab} len=${len} ORM不應被呼叫`)
+                        done++
+                    }
+                }
+            }
+        }
+        assert.strictEqual(done, 3 * 3 * (12 + 2 * 3), '完成數(3表型態 x 3長度 x (12 + 2 x 3))')
+    })
+
+})
+
+
+describe('R-MIX-01 規則6 mix之同鍵比對所見之id即實際寫入或刪除所用之id(S05)', function() {
+
+    beforeEach(function() {
+        stub.reset()
+    })
+
+    let KINDS = ['str', 'unknown', 'int']
+    let hide = (o, k, v) => Object.defineProperty(o, k, { value: v, enumerable: false, configurable: true, writable: true })
+    let rj = (proc, input) => quiet(() => getReject(proc('u1', 'tests', 'mix', input)))
+    let msgDelIrregular = (ks) => `failed to delete data, unsupported irregular object or array: ${ks.map((k) => `data[${k}]`).join(', ')}`
+
+    it('S05 不可列舉或繼承之id不參與同鍵比對(原誤拒), 自有可列舉之同鍵仍reject; mix.del列之id為存取器、繼承、Proxy、帶標籤者整批reject(F6)', async function() {
+        //規則: R-MIX-01 規則1、6; 修前 add 列 id 為不可列舉 'a1' 且 del 列 id 'a1' 被誤拒為 same id(寫入者實為補值之主鍵); mix.del 列 id 為 getter 時比對所見與後端所用不同
+        let done = 0
+        for (let { kind, proc } of getKinds().filter((v) => KINDS.includes(v.kind))) {
+            let cast = kind !== 'int'
+            //不再誤拒: add/diff 列之 id 非自有可列舉 → 視為未提供(補主鍵), del 照常
+            for (let [lab, mkRow] of [
+                ['自有不可列舉', () => hide({ name: 'new' }, 'id', 'a1')],
+                ['繼承', () => Object.assign(Object.create({ id: 'a1' }), { name: 'new' })],
+            ]) {
+                for (let [seg, mkInput, order] of [
+                    ['add', (r) => ({ add: [r], del: [{ id: 'a1' }] }), ['insert', 'del']],
+                    ['diff', (r) => ({ del: [{ id: 'a1' }], diff: [r] }), ['del', 'save']],
+                ]) {
+                    stub.reset()
+                    await quiet(() => proc('u1', 'tests', 'mix', mkInput(mkRow())))
+                    assert.deepStrictEqual(calls.map((v) => v.fn), order, `${kind} ${lab} ${seg} 呼叫序`)
+                    let written = calls.find((v) => v.fn !== 'del').data[0]
+                    assert.strictEqual(written.name, 'new', `${kind} ${lab} ${seg}`)
+                    if (cast) {
+                        assert.ok(isGen(written.id), `${kind} ${lab} ${seg} 補主鍵, 實收 ${String(written.id)}`)
+                    }
+                    else {
+                        assert.ok(!Object.prototype.hasOwnProperty.call(written, 'id'), `${kind} ${lab} ${seg} 整數型表不補值`)
+                    }
+                    same(calls.find((v) => v.fn === 'del').data, [{ id: 'a1' }], `${kind} ${lab} ${seg} del`)
+                    done++
+                }
+            }
+            //數字之不可列舉id: 同樣不參與比對
+            stub.reset()
+            await quiet(() => proc('u1', 'tests', 'mix', { add: [hide({ name: 'new' }, 'id', 5)], del: [{ id: 5 }] }))
+            assert.deepStrictEqual(calls.map((v) => v.fn), ['insert', 'del'], `${kind} 數字`)
+            assert.strictEqual(calls[1].data[0].id, cast ? '5' : 5, `${kind} 數字 del`)
+            done++
+            //對照(R-MIX-01 不退化): 自有可列舉之同鍵仍整批reject, 不寫入任何一筆
+            stub.reset()
+            assert.strictEqual(await rj(proc, { add: [{ id: 'a1', name: 'new' }], del: [{ id: 'a1' }] }), 'invalid input of mix, same id in add and del: add[0], del[0]', `${kind} 同鍵`)
+            if (cast) {
+                assert.strictEqual(await rj(proc, { add: [{ id: 5 }], del: [{ id: '5' }] }), 'invalid input of mix, same id in add and del: add[0], del[0]', `${kind} 數字與字串同鍵(R-ID-02)`)
+            }
+            assert.deepStrictEqual(calls, [], `${kind} ORM不應被呼叫`)
+            done++
+
+            //mix.del 列: 存取器、繼承、Proxy、帶標籤 → 整批reject並列位置; getter與陷阱0次
+            let c = { n: 0 }
+            let withGetter = (enumerable) => {
+                let r = {}
+                Object.defineProperty(r, 'id', {
+                    enumerable,
+                    get() {
+                        c.n++; return 'a7'
+                    }
+                })
+                return r
+            }
+            class Inh {
+                get id() {
+                    c.n++
+                    return 'a7'
+                }
+            }
+            let mkProxy = () => new Proxy({ id: 'a7' }, {
+                get(t, k, r) {
+                    c.n++; return Reflect.get(t, k, r)
+                },
+                getOwnPropertyDescriptor(t, k) {
+                    c.n++; return Reflect.getOwnPropertyDescriptor(t, k)
+                }
+            })
+            let dels = [
+                { id: 'ok1' }, //0
+                withGetter(true), //1 自有可列舉存取器
+                { id: 'ok2' }, //2
+                Object.create({ id: 'a7' }), //3 繼承資料屬性
+                withGetter(false), //4 自有不可列舉存取器
+                new Inh(), //5 繼承存取器
+                mkProxy(), //6 Proxy
+                { id: 'a7', [Symbol.toStringTag]: 'X' }, //7 帶標籤
+                hide({}, 'id', 'ok3'), //8 自有不可列舉資料屬性: 拒收(各後端讀法未必相同, 以同鍵防線之前提為重, fail-closed)
+                Object.assign(Object.create(null), { id: 'ok4' }), //9 null原型
+            ]
+            stub.reset()
+            assert.strictEqual(await rj(proc, { add: [{ id: 'a7', name: 'added' }], del: dels }), msgDelIrregular([1, 3, 4, 5, 6, 7, 8]), `${kind} mix.del 多筆`)
+            assert.strictEqual(c.n, 0, `${kind} getter與陷阱不被執行`)
+            assert.deepStrictEqual(calls, [], `${kind} ORM不應被呼叫(修前: add之a7新增後隨即被後端依getter所讀之a7刪除而resolve)`)
+            done++
+            //僅合法列: 照常, 且add與del之同鍵比對仍運作
+            stub.reset()
+            await quiet(() => proc('u1', 'tests', 'mix', { add: [{ id: 'n1' }], del: [dels[0], dels[2], dels[9]] }))
+            assert.deepStrictEqual(calls.map((v) => v.fn), ['insert', 'del'], `${kind} 合法mix.del`)
+            done++
+        }
+        assert.strictEqual(done, 3 * (4 + 1 + 1 + 1 + 1), '完成數')
+    })
+
+})
+
+
+describe('R-OBJ-01 規則5 續 find之最長路徑深度與展開後容器數(S06、S07)', function() {
+
+    beforeEach(function() {
+        stub.reset()
+    })
+
+    let MAX_DEPTH = 64 //容器層, 根為第1層
+    let MAX_NODES = 100000 //展開後容器數(共用子結構依出現次數重複計)
+    let deep = (mode) => `invalid find of ${mode}, too deep`
+    let large = (mode) => `invalid find of ${mode}, too large`
+    let rj = (proc, mode, input) => quiet(() => getReject(proc('u1', 'tests', mode, input)))
+    //m個巢狀容器之鏈: {a:{a:...{id:'a1'}}}
+    let chainObj = (m) => {
+        let x = { id: 'a1' }
+        for (let i = 1; i < m; i++) {
+            x = { a: x }
+        }
+        return x
+    }
+    //共用鏈S之DAG: 根之最長路徑為 m+2 個容器.三種鍵序,使「首次到達之走訪」(getReasonBadKey,堆疊後進先出,後面的鍵先被走訪)與「最長路徑之走訪」(measureFind,鍵序先到先走)各異:
+    //  'q-first': {q:{r:S}, p:S}  getReasonBadKey 先走p(S在第2層, 修前之首次到達深度僅 1+m 而通過); measureFind 先走q(深路徑先展開, 由堆疊深度抓到)
+    //  'p-first': {p:S, q:{r:S}}  getReasonBadKey 先走q(深路徑先到達, 由首次到達之深度檢查抓到)
+    //  'tri': {a:S, b:{r:S}, c:S}  兩個走訪都先經淺路徑展開S,深路徑最後才重用已完成之S: 只有 measureFind 之共用節點檢查(或完成時檢查)抓得到
+    let dagRoot = (m, order) => {
+        let s = chainObj(m)
+        return order === 'q-first' ? { q: { r: s }, p: s } : order === 'p-first' ? { p: s, q: { r: s } } : { a: s, b: { r: s }, c: s }
+    }
+    //指數型DAG: x_{i+1}={$and:[x_i,x_i]}, 展開後物件數 2^(k+1)-1(含陣列之容器數為 3*2^k-2), 相異容器 2k+1, 最長路徑 2k+1
+    let expDag = (k) => {
+        let x = { id: 'a1' }
+        for (let i = 0; i < k; i++) {
+            x = { $and: [x, x] }
+        }
+        return x
+    }
+
+    it('S06 共用子結構: 最長路徑恰64個容器通過、65個reject(含首次到達較淺之DAG); 展開後容器數恰100,000通過、100,001reject; 循環reject; 合理重用照常(A-07 ①②)', async function() {
+        //規則5續; 修前: 首次到達深度僅1+m, 最長路徑65~403個容器之DAG通過; 展開數無上限, 指數型DAG展開2^k個物件
+        let done = 0
+        for (let { kind, proc } of getKinds()) {
+            for (let mode of ['select', 'delAll']) {
+                let L = `${kind} ${mode}`
+                //最長路徑邊界(三種鍵序)
+                for (let order of ['q-first', 'p-first', 'tri']) {
+                    for (let [m, ok] of [[61, true], [62, true], [63, false], [64, false], [200, false]]) {
+                        stub.reset()
+                        if (ok) {
+                            await quiet(() => proc('u1', 'tests', mode, dagRoot(m, order)))
+                            assert.strictEqual(calls.length, 1, `${L} dag m=${m} ${order} 通過(最長路徑${m + 2})`)
+                        }
+                        else {
+                            assert.strictEqual(await rj(proc, mode, dagRoot(m, order)), deep(mode), `${L} dag m=${m} ${order} (最長路徑${m + 2})`)
+                            assert.strictEqual(calls.length, 0, `${L} dag m=${m} ORM不應被呼叫`)
+                        }
+                        done++
+                    }
+                }
+                //展開後物件數邊界(陣列不計): 根(1)+N個共用之葉各算1
+                let leaf = { id: 'a1' }
+                for (let [n, ok] of [[MAX_NODES - 1, true], [MAX_NODES, false]]) {
+                    stub.reset()
+                    let find = { $or: Array.from({ length: n }, () => leaf) }
+                    if (ok) {
+                        await quiet(() => proc('u1', 'tests', mode, find))
+                        assert.strictEqual(calls.length, 1, `${L} 兄弟${n}個(展開${n + 1})通過`)
+                    }
+                    else {
+                        assert.strictEqual(await rj(proc, mode, find), large(mode), `${L} 兄弟${n}個(展開${n + 1})`)
+                        assert.strictEqual(calls.length, 0, `${L} 兄弟${n}個 ORM不應被呼叫`)
+                    }
+                    done++
+                }
+                //無共用之樹(各葉為相異物件): 根(1)+N個葉(陣列不計); 恰100,000通過、100,001 reject(不能以「有無共用參考」捷徑略過展開數)
+                for (let [n, ok] of [[MAX_NODES - 1, true], [MAX_NODES, false]]) {
+                    stub.reset()
+                    let tree = { $or: Array.from({ length: n }, () => ({ id: 'a1' })) }
+                    if (ok) {
+                        await quiet(() => proc('u1', 'tests', mode, tree))
+                        assert.strictEqual(calls.length, 1, `${L} 無共用之樹${n}葉(展開${n + 1})通過`)
+                    }
+                    else {
+                        assert.strictEqual(await rj(proc, mode, tree), large(mode), `${L} 無共用之樹${n}葉(展開${n + 1})`)
+                        assert.strictEqual(calls.length, 0, `${L} 無共用之樹${n}葉 ORM不應被呼叫`)
+                    }
+                    done++
+                }
+                //以Date為葉之深度邊界: Date不是容器, 恰64個容器(深端為{d: Date})通過、65個reject
+                for (let [m, ok] of [[64, true], [65, false]]) {
+                    stub.reset()
+                    let x = { d: new Date() }
+                    for (let i = 1; i < m; i++) {
+                        x = { a: x }
+                    }
+                    if (ok) {
+                        await quiet(() => proc('u1', 'tests', mode, x))
+                        assert.strictEqual(calls.length, 1, `${L} Date葉 ${m}個容器通過`)
+                    }
+                    else {
+                        assert.strictEqual(await rj(proc, mode, x), deep(mode), `${L} Date葉 ${m}個容器`)
+                        assert.strictEqual(calls.length, 0, `${L} Date葉 ${m}個容器 ORM不應被呼叫`)
+                    }
+                    done++
+                }
+                //同上, 但共用之葉直接掛在根物件之N個鍵下(根自己累計): 根(1)+N個共用之葉; 恰100,000通過、100,001 reject(以根為累計者計入之邊界不同於陣列)
+                for (let [n, ok] of [[MAX_NODES - 1, true], [MAX_NODES, false]]) {
+                    stub.reset()
+                    let wide = {}
+                    for (let i = 0; i < n; i++) {
+                        wide[`k${i}`] = leaf
+                    }
+                    if (ok) {
+                        await quiet(() => proc('u1', 'tests', mode, wide))
+                        assert.strictEqual(calls.length, 1, `${L} 根${n}鍵(展開${n + 1})通過`)
+                    }
+                    else {
+                        assert.strictEqual(await rj(proc, mode, wide), large(mode), `${L} 根${n}鍵(展開${n + 1})`)
+                        assert.strictEqual(calls.length, 0, `${L} 根${n}鍵 ORM不應被呼叫`)
+                    }
+                    done++
+                }
+                //指數型DAG: k=15 展開65,535個物件通過; k=16 展開131,071個物件 reject
+                for (let [k, ok] of [[15, true], [16, false]]) {
+                    stub.reset()
+                    if (ok) {
+                        await quiet(() => proc('u1', 'tests', mode, expDag(k)))
+                        assert.strictEqual(calls.length, 1, `${L} expDag k=${k} 通過`)
+                    }
+                    else {
+                        assert.strictEqual(await rj(proc, mode, expDag(k)), large(mode), `${L} expDag k=${k}`)
+                        assert.strictEqual(calls.length, 0, `${L} expDag k=${k} ORM不應被呼叫`)
+                    }
+                    done++
+                }
+                //極端指數(含最長路徑僅63):  整數型/無該表者原物件交ORM不展開, 修前不致崩潰; 字串型/未知型於修前展開 2^31 個物件, 故只於不經castIdFind之表型態測(其餘由k=16~20涵蓋同一程式路徑)
+                if (kind === 'int' || kind === 'none') {
+                    for (let [k, msg] of [[21, large(mode)], [31, large(mode)], [32, deep(mode)], [60, deep(mode)], [5000, deep(mode)]]) {
+                        stub.reset()
+                        let [err, ms] = await (async () => {
+                            let t = Date.now()
+                            let e = await rj(proc, mode, expDag(k))
+                            return [e, Date.now() - t]
+                        })()
+                        assert.strictEqual(err, msg, `${L} expDag k=${k}`)
+                        assert.ok(ms < 1000, `${L} expDag k=${k} 耗時 ${ms} ms`)
+                        assert.strictEqual(calls.length, 0, `${L} expDag k=${k} ORM不應被呼叫`)
+                        done++
+                    }
+                }
+                else {
+                    //k=20於修前約1秒、+213MB後交ORM; 修後立即reject
+                    stub.reset()
+                    let t = Date.now()
+                    assert.strictEqual(await rj(proc, mode, expDag(20)), large(mode), `${L} expDag k=20`)
+                    assert.ok(Date.now() - t < 1000, `${L} expDag k=20 耗時 ${Date.now() - t} ms`)
+                    assert.strictEqual(calls.length, 0, `${L} expDag k=20 ORM不應被呼叫`)
+                    done++
+                }
+                //循環(物件自指、$and自指、間接): 所有表型態皆固定訊息reject, ORM未被呼叫
+                let cyc1 = { $and: [] }
+                cyc1.$and.push(cyc1)
+                let cyc2 = { id: 'a1' }
+                cyc2.self = cyc2
+                let cyc3 = { x: { y: { z: {} } } }
+                cyc3.x.y.z.back = cyc3.x
+                for (let [lab, cyc] of [['$and自指', cyc1], ['物件自指', cyc2], ['間接', cyc3]]) {
+                    stub.reset()
+                    assert.strictEqual(await rj(proc, mode, cyc), deep(mode), `${L} 循環 ${lab}`)
+                    assert.strictEqual(calls.length, 0, `${L} 循環 ${lab} ORM不應被呼叫`)
+                    done++
+                }
+                //合理之重用: 同一子條件於1000處(展開4,002個容器)照常
+                let sub = { name: 'x' }
+                stub.reset()
+                await quiet(() => proc('u1', 'tests', mode, { $or: Array.from({ length: 1000 }, () => ({ $and: [sub, sub] })) }))
+                assert.strictEqual(calls.length, 1, `${L} 合理重用`)
+                done++
+            }
+        }
+        //kinds 4(str、unknown、int、none) x mode 2 x [dag 10 + 兄弟2 + expDag 2 + 極端(int、none 5; str、unknown 1) + 循環3 + 重用1]
+        assert.strictEqual(done, 2 * (2 * (15 + 2 + 2 + 2 + 2 + 2 + 5 + 3 + 1) + 2 * (15 + 2 + 2 + 2 + 2 + 2 + 1 + 3 + 1)), '完成數')
+    })
+
+    it('S07 隨機分層DAG(固定種子, 樸素遞迴之BigInt預言機): 最長路徑>64或展開>100,000 ⇔ reject(too deep或too large), 兩側皆有案例', async function() {
+        //規則5續; 預言機: 逐路徑展開之容器數與最長路徑, 獨立於被測之記憶化演算法
+        let seed = 20261020
+        let rnd = () => {
+            seed = (seed * 1664525 + 1013904223) % 4294967296
+            return seed / 4294967296
+        }
+        let ri = (a, b) => a + Math.floor(rnd() * (b - a + 1))
+        let gen = () => {
+            let L = ri(1, 40)
+            let w = ri(1, 3)
+            let f = ri(1, 3)
+            let layers = []
+            layers[L] = Array.from({ length: w }, () => ({ id: 'a' }))
+            for (let l = L - 1; l >= 0; l--) {
+                layers[l] = Array.from({ length: w }, () => ({ $and: Array.from({ length: ri(1, f) }, () => layers[l + 1][ri(0, w - 1)]) }))
+            }
+            return rnd() < 0.5 ? { $or: layers[0] } : layers[0][0] //前者令第0層全部置於淺層, 重現首次到達深度之繞過
+        }
+        let oracle = (root) => {
+            let m = new Map()
+            let go = (o) => {
+                if (o === null || typeof o !== 'object') {
+                    return { d: 0, n: 0n }
+                }
+                if (m.has(o)) {
+                    return m.get(o)
+                }
+                let d = 0
+                let n = Array.isArray(o) ? 0n : 1n //展開數只計物件(不含陣列)
+                for (let k of Object.keys(o)) {
+                    let c = go(o[k])
+                    d = Math.max(d, c.d)
+                    n += c.n
+                }
+                let r = { d: d + 1, n }
+                m.set(o, r)
+                return r
+            }
+            return go(root)
+        }
+        let kinds = getKinds()
+        let procInt = kinds.find((v) => v.kind === 'int').proc
+        let procStr = kinds.find((v) => v.kind === 'str').proc
+        let tally = { pass: 0, deep: 0, large: 0 }
+        let N = 1500
+        for (let i = 0; i < N; i++) {
+            let root = gen()
+            let o = oracle(root)
+            let expectReject = o.d > MAX_DEPTH || o.n > BigInt(MAX_NODES)
+            stub.reset()
+            //整數型表: 全部案例(不經castIdFind, 修前亦不致展開)
+            let r = await quiet(() => procInt('u1', 'tests', 'select', root).then(() => 'ok', (e) => String(e)))
+            if (!expectReject) {
+                assert.strictEqual(r, 'ok', `#${i} 預言機: 最長路徑${o.d} 展開${o.n} 應通過`)
+                assert.strictEqual(calls.length, 1, `#${i}`)
+                tally.pass++
+                //字串型表: 僅預言機判通過者(展開 ≤ 100,000, 修前亦安全)
+                stub.reset()
+                await quiet(() => procStr('u1', 'tests', 'select', root))
+                assert.strictEqual(calls.length, 1, `#${i} 字串型表通過`)
+            }
+            else {
+                assert.ok(r === deep('select') || r === large('select'), `#${i} 預言機: 最長路徑${o.d} 展開${o.n} 應reject, 實得 ${r}`)
+                assert.strictEqual(calls.length, 0, `#${i} ORM不應被呼叫`)
+                if (r === deep('select')) {
+                    tally.deep++
+                }
+                else {
+                    tally.large++
+                }
+            }
+        }
+        assert.strictEqual(tally.pass + tally.deep + tally.large, N, '完成數')
+        assert.ok(tally.pass > 300 && tally.deep > 100 && tally.large > 100, `三類皆有足量案例 ${JSON.stringify(tally)}`)
+    })
+
+})
+
+
+describe('JSON來源之一般輸入行為鎖定(S08): 第82項修正不改變資料通道可達之輸入', function() {
+
+    beforeEach(function() {
+        stub.reset()
+    })
+
+    //預言機: 樸素之參考實作(R-ID-02 轉型、R-ID-01 補值、R-INPUT-01 形狀), 輸入一律為 JSON.parse(JSON.stringify()) 之樹, 與修正前後之行為皆相同
+    //(同一語料於 HEAD 之 src 亦全綠, 證明預言機本身正確; 修正後仍全綠, 證明 JSON 來源之行為未變)
+    const GEN = '<GEN>'
+    const OPS = ['$eq', '$ne', '$gt', '$gte', '$lt', '$lte', '$in', '$nin']
+    let castId = (v, cast) => (cast && typeof v === 'number' && Number.isFinite(v) ? String(v) : v)
+    let refCond = (c, cast) => {
+        if (!cast) {
+            return c
+        }
+        if (c !== null && typeof c === 'object' && !Array.isArray(c)) {
+            let r = {}
+            for (let k of Object.keys(c)) {
+                r[k] = OPS.includes(k) ? (Array.isArray(c[k]) ? c[k].map((x) => castId(x, true)) : castId(c[k], true)) : c[k]
+            }
+            return r
+        }
+        return castId(c, true)
+    }
+    let refFind = (f, cast) => {
+        if (!cast || f === null || typeof f !== 'object') {
+            return f
+        }
+        let r = {}
+        for (let k of Object.keys(f)) {
+            if (k === 'id') {
+                r[k] = refCond(f[k], true)
+            }
+            else if ((k === '$and' || k === '$or') && Array.isArray(f[k])) {
+                r[k] = f[k].map((x) => refFind(x, true))
+            }
+            else {
+                r[k] = f[k]
+            }
+        }
+        return r
+    }
+    //寫入列: 轉型後, 有效輸入(單一物件須非空; 陣列須長度>=2, 或長度1而該列非空)才補主鍵(R-ID-01 規則3)
+    let refWrite = (data, cast) => {
+        let one = !Array.isArray(data)
+        let rows = (one ? [data] : data).map((v) => ({ ...v, ...(cast && 'id' in v ? { id: castId(v.id, true) } : {}) }))
+        let effective = one ? Object.keys(rows[0]).length > 0 : (rows.length >= 2 || (rows.length === 1 && Object.keys(rows[0]).length > 0))
+        if (cast && effective) {
+            rows = rows.map((v) => (typeof v.id === 'string' && v.id.length > 0 ? v : { ...v, id: GEN }))
+        }
+        return one ? rows[0] : rows
+    }
+    let refDel = (data, cast) => {
+        let one = !Array.isArray(data)
+        let rows = (one ? [data] : data).map((v) => (cast && typeof v.id === 'number' && Number.isFinite(v.id) ? { ...v, id: String(v.id) } : v))
+        return one ? rows[0] : rows
+    }
+    let norm = (d) => {
+        let nr = (r) => (r !== null && typeof r === 'object' && isGen(r.id) ? { ...r, id: GEN } : r)
+        return Array.isArray(d) ? d.map(nr) : nr(d)
+    }
+
+    //語料(固定種子)
+    let seed = 8008
+    let rnd = () => {
+        seed = (seed * 1664525 + 1013904223) % 4294967296
+        return seed / 4294967296
+    }
+    let pick = (a) => a[Math.floor(rnd() * a.length)]
+    let STR = ['', 'a1', 'a2', 'beta', '中文', 'x y', '12', 'length', 'true']
+    let NUM = [0, 1, 5, 123, -1, 1.5, 1e21, 0.1]
+    let KEY = ['name', 'meta', 'length', 'x', 'y', 'arr']
+    let scalar = () => {
+        let r = rnd()
+        return r < 0.45 ? pick(STR) : r < 0.8 ? pick(NUM) : r < 0.9 ? null : rnd() < 0.5
+    }
+    let value = (d) => {
+        let r = rnd()
+        if (d <= 0 || r < 0.5) {
+            return scalar()
+        }
+        if (r < 0.75) {
+            return Array.from({ length: Math.floor(rnd() * 4) }, () => value(d - 1))
+        }
+        let o = {}
+        for (let i = Math.floor(rnd() * 4); i > 0; i--) {
+            o[pick(KEY)] = value(d - 1)
+        }
+        return o
+    }
+    //row(strPool, numBase): id 之形態: 非空字串、有限數字、null、''、布林、物件、陣列、缺
+    //special: 非mix之入口另含特殊數字id(0、負數、小數、1e21)——mix各段之id須互不相同, 不含
+    let row = (sp, nb, special = false) => {
+        let o = {}
+        let r = rnd()
+        if (r < 0.4) {
+            o.id = `${sp}${Math.floor(rnd() * 5)}`
+        }
+        else if (r < 0.65) {
+            o.id = special && rnd() < 0.5 ? pick([0, -1, 1.5, 1e21, 0.1]) : nb + Math.floor(rnd() * 5)
+        }
+        else if (r < 0.7) {
+            o.id = null
+        }
+        else if (r < 0.75) {
+            o.id = ''
+        }
+        else if (r < 0.8) {
+            o.id = rnd() < 0.5
+        }
+        else if (r < 0.85) {
+            o.id = rnd() < 0.5 ? { a: 1 } : [1]
+        }
+        for (let i = Math.floor(rnd() * 4); i > 0; i--) {
+            o[pick(KEY)] = value(3)
+        }
+        return o
+    }
+    let rows = (sp, nb, special = false) => {
+        let r = rnd()
+        return r < 0.25 ? row(sp, nb, special) : r < 0.3 ? [] : r < 0.35 ? {} : r < 0.4 ? [{}] : Array.from({ length: 1 + Math.floor(rnd() * 4) }, () => row(sp, nb, special))
+    }
+    let idCond = () => {
+        let r = rnd()
+        if (r < 0.4) {
+            return scalar()
+        }
+        let o = {}
+        for (let i = 1 + Math.floor(rnd() * 2); i > 0; i--) {
+            let op = pick([...OPS, '$regex'])
+            o[op] = op === '$in' || op === '$nin' ? Array.from({ length: Math.floor(rnd() * 4) }, scalar) : scalar()
+        }
+        return o
+    }
+    let find = (d) => {
+        let o = {}
+        if (rnd() < 0.6) {
+            o.id = idCond()
+        }
+        if (rnd() < 0.5) {
+            o.name = scalar()
+        }
+        if (rnd() < 0.2) {
+            o.length = pick([0, 1, 3.5, '2'])
+        }
+        if (d > 0 && rnd() < 0.35) {
+            o[pick(['$and', '$or'])] = Array.from({ length: Math.floor(rnd() * 3) }, () => find(d - 1))
+        }
+        return o
+    }
+    let topFind = () => {
+        let r = rnd()
+        return r < 0.04 ? null : r < 0.07 ? [] : r < 0.09 ? 'x' : r < 0.11 ? 5 : r < 0.15 ? undefined : find(3)
+    }
+    let json = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)))
+    let N = 400
+
+    it('S08 JSON來源之列與條件(insert、save、del、mix、select、delAll x 字串型/未知型/整數型/無該表): ORM收到之實參與參考實作逐組相同', async function() {
+        //R-ID-02、R-ID-01、R-INPUT-01 於 JSON 可表達之輸入上的行為; 第82項修正(規則7、規則5續)不得改變
+        let done = 0
+        let tally = { ok: 0, reject: 0 }
+        for (let { kind, proc } of getKinds()) {
+            let cast = kind === 'str' || kind === 'unknown'
+            let modes = kind === 'none' ? ['del', 'select', 'delAll'] : ['insert', 'save', 'del', 'mix', 'select', 'delAll']
+            for (let mode of modes) {
+                for (let i = 0; i < N; i++) {
+                    stub.reset()
+                    let L = `${kind} ${mode} #${i}`
+                    let input
+                    let expectErr = null
+                    let expectCalls
+                    if (mode === 'insert' || mode === 'save') {
+                        input = json(rows('A', 1000, true))
+                        expectCalls = [{ fn: mode, data: refWrite(json(input), cast) }]
+                    }
+                    else if (mode === 'del') {
+                        input = json(rows('D', 2000, true))
+                        expectCalls = [{ fn: 'del', data: refDel(json(input), cast) }]
+                    }
+                    else if (mode === 'mix') {
+                        input = {}
+                        let add = rnd() < 0.7 ? json(Array.from({ length: Math.floor(rnd() * 3) }, () => row('A', 1000))) : undefined
+                        let del = rnd() < 0.7 ? json(Array.from({ length: Math.floor(rnd() * 3) }, () => row('D', 2000))) : undefined
+                        let diff = rnd() < 0.5 ? json(Array.from({ length: Math.floor(rnd() * 3) }, () => row('F', 3000))) : undefined
+                        for (let [k, v] of [['add', add], ['del', del], ['diff', diff]]) {
+                            if (v !== undefined) {
+                                input[k] = v
+                            }
+                        }
+                        if (Object.keys(input).length === 0) {
+                            input.add = []
+                        }
+                        expectCalls = []
+                        if (add && add.length > 0) {
+                            expectCalls.push({ fn: 'insert', data: refWrite(json(add), cast) })
+                        }
+                        if (del && del.length > 0) {
+                            expectCalls.push({ fn: 'del', data: refDel(json(del), cast) })
+                        }
+                        if (diff && diff.length > 0) {
+                            expectCalls.push({ fn: 'save', data: refWrite(json(diff), cast) })
+                        }
+                    }
+                    else {
+                        input = topFind()
+                        if (input !== undefined && (input === null || typeof input !== 'object' || Array.isArray(input))) {
+                            expectErr = `invalid find of ${mode}, need an object`
+                            expectCalls = []
+                        }
+                        else {
+                            input = json(input)
+                            expectCalls = [{ fn: mode, data: refFind(json(input), cast) }]
+                        }
+                    }
+                    let got = await quiet(() => proc('u1', 'tests', mode, json(input)).then(() => null, (e) => String(e)))
+                    assert.strictEqual(got, expectErr, `${L} reject`)
+                    same(calls.map((v) => ({ fn: v.fn, data: norm(v.data) })), expectCalls, `${L} ORM收到`)
+                    tally[expectErr === null ? 'ok' : 'reject']++
+                    done++
+                }
+            }
+        }
+        assert.strictEqual(done, N * (3 * 6 + 3), '完成數')
+        assert.ok(tally.ok > 7000 && tally.reject > 100, `通過與reject兩側皆有案例 ${JSON.stringify(tally)}`)
+    })
+
+})
+
+
+//R-OBJ-01 規則7 續(第82項 run02, 外審 sol 第一輪 F01~F04、F06~F09): 通過檢查之後不再執行使用端程式, 且檢查之值即使用之值
+describe('R-OBJ-01 規則7 續 檢查之後不執行使用端程式(S09~S14)', function() {
+
+    beforeEach(function() {
+        stub.reset()
+    })
+
+    let KINDS = ['str', 'unknown', 'int']
+    let IRREG = 'unsupported irregular object or array'
+    let msgWrite = { 'insert': 'failed to insert data', 'save': 'failed to save data', 'mix.add': 'failed to insert data', 'mix.diff': 'failed to update data' }
+    let runW = (proc, entry, row) => {
+        switch (entry) {
+        case 'insert': return proc('u1', 'tests', 'insert', [row])
+        case 'save': return proc('u1', 'tests', 'save', [row])
+        case 'mix.add': return proc('u1', 'tests', 'mix', { add: [row] })
+        case 'mix.diff': return proc('u1', 'tests', 'mix', { diff: [row] })
+        }
+        throw new Error(`entry ${entry}`)
+    }
+    let rjS = (proc, mode, input) => quiet(() => getReject(proc('u1', 'tests', mode, input)))
+    let hasOwn = (o, k) => Object.prototype.hasOwnProperty.call(o, k)
+    let firstRow = () => (Array.isArray(calls[0].data) ? calls[0].data[0] : calls[0].data)
+    let okRow = () => ({ id: 'a1', name: 'x' })
+
+    it('S09 函數型列(宣稱Object標籤之函數、callable Proxy、標籤getter拋使用端字串者): 寫入列與mix.del列整批irregular, 陷阱與getter 0次, 不轉出使用端字串; 無標籤之普通函數維持not an object(F02)', async function() {
+        //規則7 ②; 修前: isIrregularRow 以 typeof object 為前提而略過函數, isobj 卻相信函數之標籤而當成列複製; 標籤getter拋字串時被邊界保證當成本層固定訊息原樣轉出
+        let reads = 0
+        let tagged = () => {
+            let f = function() {}
+            f.id = 'f1'
+            f[Symbol.toStringTag] = 'Object'
+            return f
+        }
+        let callableProxy = () => new Proxy(function() {}, {
+            get(t, k, r) {
+                reads++
+                return Reflect.get(t, k, r)
+            },
+            getOwnPropertyDescriptor(t, k) {
+                reads++
+                return Reflect.getOwnPropertyDescriptor(t, k)
+            },
+        })
+        let throwing = () => {
+            let f = function() {}
+            Object.defineProperty(f, Symbol.toStringTag, {
+                get() {
+                    reads++
+                    throw 'SECRET-USER-STRING' // eslint-disable-line no-throw-literal
+                },
+            })
+            return f
+        }
+        let done = 0
+        for (let { kind, proc } of getKinds().filter((v) => KINDS.includes(v.kind))) {
+            for (let [lab, mk] of [['宣稱Object標籤之函數', tagged], ['callable Proxy', callableProxy], ['標籤getter拋使用端字串之函數', throwing]]) {
+                for (let entry of ['insert', 'save', 'mix.add', 'mix.diff']) {
+                    stub.reset()
+                    let err = await quiet(() => getReject(runW(proc, entry, mk())))
+                    assert.strictEqual(err, `${msgWrite[entry]}, ${IRREG}: data[0]`, `${kind} ${lab} ${entry}`)
+                    assert.deepStrictEqual(calls, [], `${kind} ${lab} ${entry} ORM不應被呼叫`)
+                    done++
+                }
+                stub.reset()
+                let err = await quiet(() => getReject(proc('u1', 'tests', 'mix', { add: [okRow()], del: [mk()] })))
+                assert.strictEqual(err, `failed to delete data, ${IRREG}: data[0]`, `${kind} ${lab} mix.del`)
+                assert.deepStrictEqual(calls, [], `${kind} ${lab} mix.del ORM不應被呼叫`)
+                done++
+            }
+            assert.strictEqual(reads, 0, `${kind} 陷阱與getter不被執行`)
+            //對照: 無標籤之普通函數維持既有之 not an object; mix.del 之普通函數同單獨del交後端逐筆處置
+            stub.reset()
+            assert.strictEqual(await rjS(proc, 'insert', [function() {}]), 'failed to insert data, not an object: data[0]', `${kind} 普通函數`)
+            stub.reset()
+            await quiet(() => proc('u1', 'tests', 'mix', { del: [function() {}] }))
+            assert.strictEqual(calls.length, 1, `${kind} mix.del 普通函數交後端`)
+        }
+        assert.strictEqual(done, 3 * 3 * 5, '完成數')
+    })
+
+    it('S10 通過檢查後之複製不執行getter: 數字id列帶可列舉Symbol getter、del列帶其他getter, 皆0次; 模擬後端於del步驟讀取del列時其副作用不得改動尚未寫入之add與diff(F03)', async function() {
+        //規則7 ①; 修前: castIdRows 以 { ...v, id } 展開, 會讀取可列舉Symbol鍵之getter與del列之其他getter(此時寫入列已通過鍵檢查而尚未clearXSS), getter可向已檢查之meta加入自有__proto__
+        let reads = 0
+        let mkSym = () => {
+            let row = { id: 123, name: 'n', meta: {} }
+            Object.defineProperty(row, Symbol('s'), {
+                enumerable: true,
+                get() {
+                    reads++
+                    Object.defineProperty(row.meta, '__proto__', { value: { unchecked: 1 }, enumerable: true, configurable: true, writable: true })
+                    return 0
+                },
+            })
+            return row
+        }
+        for (let { kind, proc } of getKinds().filter((v) => KINDS.includes(v.kind))) {
+            for (let entry of ['insert', 'save', 'mix.add', 'mix.diff']) {
+                stub.reset()
+                await quiet(() => runW(proc, entry, mkSym()))
+                assert.strictEqual(calls.length, 1, `${kind} ${entry}`)
+                assert.strictEqual(reads, 0, `${kind} ${entry} Symbol getter不被執行`)
+                assert.ok(!hasOwn(firstRow().meta, '__proto__'), `${kind} ${entry} 寫入之meta無自有__proto__`)
+            }
+        }
+        //模擬後端: del步驟讀取del列之全部自有鍵(真ORM之cloneDeep會執行getter)
+        let calls2 = []
+        let WOrmReading = function() {
+            let ev = {}
+            for (let fn of ['select', 'insert', 'save', 'del', 'delAll']) {
+                ev[fn] = async (data) => {
+                    calls2.push({ fn, data })
+                    if (fn === 'del') {
+                        for (let row of data) {
+                            for (let k of Object.keys(row)) {
+                                row[k] //eslint-disable-line no-unused-expressions
+                            }
+                        }
+                    }
+                    let n = Array.isArray(data) ? data.length : 1
+                    return fn === 'insert' || fn === 'delAll' ? { n: 1, nInserted: 1, ok: 1 } : Array.from({ length: n }, () => ({ n: 1, nModified: 1, nDeleted: 1, ok: 1 }))
+                }
+            }
+            return ev
+        }
+        for (let [kind, ds] of [['str', dsStr], ['int', dsInt]]) {
+            let procR = WServOrm(ds, WOrmReading, 'u', 'd').procOrm
+            calls2.length = 0
+            reads = 0
+            let addRow = { id: 'n1', name: 'add', meta: {} }
+            let diffRow = { id: 'f1', name: 'diff', meta: {} }
+            let delRow = {
+                id: 5,
+                get unused() {
+                    reads++
+                    for (let r of [addRow, diffRow]) {
+                        Object.defineProperty(r.meta, '__proto__', { value: { unchecked: 1 }, enumerable: true, configurable: true, writable: true })
+                    }
+                    return 0
+                },
+            }
+            await quiet(() => procR('u1', 'tests', 'mix', { add: [addRow], del: [delRow], diff: [diffRow] }))
+            assert.deepStrictEqual(calls2.map((v) => v.fn), ['insert', 'del', 'save'], `${kind} 呼叫序`)
+            assert.strictEqual(reads, 1, `${kind} getter僅由後端於del步驟執行一次(本層不執行)`)
+            for (let c of calls2.filter((v) => v.fn !== 'del')) {
+                assert.ok(!hasOwn(c.data[0].meta, '__proto__'), `${kind} ${c.fn} 寫入之meta無自有__proto__(adjustData之深複本早於del步驟)`)
+            }
+        }
+    })
+
+    it('S11 稽核欄位(userId、timeCreate、userIdUpdate、timeUpdate)以defineProperty寫入, 不執行原型上之setter: 不改寫id、不加入未檢查之欄位; 凍結列仍為failed to adjust data; 字串主鍵列之原物件仍被寫入稽核欄位(既有行為鎖定)(F04)', async function() {
+        //規則7; 修前: adjustData 以賦值寫入稽核欄位, 類別DTO之原型setter在跨段同鍵檢查之後被執行, 可改寫id(使檢查所見之id不同於實際寫入者)並向列加入含自有__proto__之欄位
+        let keys = ['id', 'name', 'meta', 'userId', 'timeCreate', 'userIdUpdate', 'timeUpdate']
+        let dsA = {
+            str: { tests: { keys, settings: { id: { pk: true, type: 'STRING' }, name: { type: 'STRING' } } } },
+            unknown: { tests: { keys } },
+            int: { tests: { keys, settings: { id: { pk: true, type: 'INTEGER' }, name: { type: 'STRING' } } } },
+        }
+        let reads = 0
+        class Dto {
+            constructor(id) {
+                this.id = id
+                this.name = 'n'
+                this.meta = {}
+            }
+
+            set userIdUpdate(v) { // eslint-disable-line accessor-pairs
+                reads++
+                this.id = 'keep'
+                Object.defineProperty(this.meta, '__proto__', { value: { unchecked: 1 }, enumerable: true, configurable: true, writable: true })
+            }
+        }
+        for (let kind of KINDS) {
+            let proc = WServOrm(dsA[kind], WOrmStub, 'u', 'd').procOrm
+            for (let entry of ['insert', 'save', 'mix.add', 'mix.diff']) {
+                stub.reset()
+                let row = new Dto('new')
+                await quiet(() => runW(proc, entry, row))
+                assert.strictEqual(calls.length, 1, `${kind} ${entry}`)
+                assert.strictEqual(reads, 0, `${kind} ${entry} 原型setter不被執行`)
+                let got = firstRow()
+                assert.strictEqual(got.id, 'new', `${kind} ${entry} id不被改寫`)
+                assert.ok(!hasOwn(got.meta, '__proto__'), `${kind} ${entry} 無未檢查之欄位`)
+                assert.strictEqual(got.userIdUpdate, 'u1', `${kind} ${entry} 稽核欄位已寫入`)
+                assert.ok(typeof got.timeUpdate === 'string' && got.timeUpdate.length > 0, `${kind} ${entry} timeUpdate`)
+            }
+            //凍結之列: 寫入稽核欄位拋TypeError, 轉為固定字串
+            stub.reset()
+            assert.strictEqual(await rjS(proc, 'insert', [Object.freeze({ id: 'a', name: 'n' })]), 'failed to adjust data', `${kind} 凍結列`)
+            assert.deepStrictEqual(calls, [], `${kind} 凍結列 ORM不應被呼叫`)
+        }
+        //既有行為鎖定(帳本 R-OBJ-01 已知限制): 字串主鍵之列(未經轉型複製)其原物件被寫入稽核欄位
+        let procS = WServOrm(dsA.str, WOrmStub, 'u', 'd').procOrm
+        let own = { id: 'a1', name: 'n' }
+        await quiet(() => procS('u1', 'tests', 'insert', [own]))
+        assert.strictEqual(own.userId, 'u1', '原物件被寫入稽核欄位(既有行為)')
+    })
+
+    it('S12 存取器之判準以描述子有無value欄位為準: get與set皆為undefined之存取器id/欄位仍視為存取器(寫入列與find整批reject, mix.del列整批reject)(F07)', async function() {
+        //規則3、7; 修前: 以 d.get !== undefined || d.set !== undefined 判斷, 漏掉 { get: undefined, set: undefined }
+        let emptyAcc = (o, k, enumerable = true) => Object.defineProperty(o, k, { get: undefined, set: undefined, enumerable, configurable: true })
+        for (let { kind, proc } of getKinds().filter((v) => KINDS.includes(v.kind))) {
+            for (let entry of ['insert', 'save', 'mix.add', 'mix.diff']) {
+                stub.reset()
+                assert.strictEqual(await quiet(() => getReject(runW(proc, entry, emptyAcc({ name: 'x' }, 'id')))), `${msgWrite[entry]}, unsupported accessor property: data[0]`, `${kind} ${entry} id`)
+                assert.strictEqual(await quiet(() => getReject(runW(proc, entry, emptyAcc({ id: 'a1' }, 'name')))), `${msgWrite[entry]}, unsupported accessor property: data[0]`, `${kind} ${entry} 欄位`)
+                assert.deepStrictEqual(calls, [], `${kind} ${entry} ORM不應被呼叫`)
+            }
+            for (let enumerable of [true, false]) {
+                stub.reset()
+                assert.strictEqual(await quiet(() => getReject(proc('u1', 'tests', 'mix', { add: [{ id: 'a1' }], del: [emptyAcc({}, 'id', enumerable)] }))), `failed to delete data, ${IRREG}: data[0]`, `${kind} mix.del enumerable=${enumerable}`)
+                assert.deepStrictEqual(calls, [], `${kind} mix.del ORM不應被呼叫`)
+            }
+            for (let mode of ['select', 'delAll']) {
+                assert.strictEqual(await rjS(proc, mode, emptyAcc({}, 'name')), `invalid find of ${mode}, unsupported accessor property`, `${kind} ${mode}`)
+            }
+            //不可列舉之空存取器id(寫入列): 與不可列舉之存取器同, 視為未提供
+            stub.reset()
+            await quiet(() => proc('u1', 'tests', 'insert', [emptyAcc({ name: 'x' }, 'id', false)]))
+            assert.strictEqual(calls.length, 1, `${kind} 不可列舉之空存取器id視為未提供`)
+            assert.ok(!hasOwn(firstRow(), 'id') || isGen(firstRow().id), `${kind} 補主鍵或無id`)
+        }
+    })
+
+    it('S13 原型鏈長度上限(MAX_CHAIN: 鏈上至多65個物件含自身): 共用陣列帶長原型鏈而被引用多次時分類成本有界; 恰在上限通過、逾1層以irregular拒收(F08)', async function() {
+        //規則5續、6; 修前: measureFind 對每條邊重新分類而重掃原型鏈, E 條邊 x P 層原型為平方; 現鏈長逾上限者視為不乾淨
+        let withChain = (arr, k) => {
+            //arr -> p1 -> ... -> pk -> Array.prototype -> Object.prototype -> null; 鏈上物件數 = 1 + k + 2
+            let top = Array.prototype
+            for (let i = 0; i < k; i++) {
+                top = Object.create(top)
+            }
+            return Object.setPrototypeOf(arr, top)
+        }
+        for (let { kind, proc } of getKinds()) {
+            for (let mode of ['select', 'delAll']) {
+                let L = `${kind} ${mode}`
+                stub.reset()
+                await quiet(() => proc('u1', 'tests', mode, { id: { $in: withChain([], 61) } })) //鏈上64個物件
+                assert.strictEqual(calls.length, 1, `${L} 鏈上64個物件通過`)
+                stub.reset()
+                await quiet(() => proc('u1', 'tests', mode, { id: { $in: withChain([], 62) } })) //65個(上限)
+                assert.strictEqual(calls.length, 1, `${L} 鏈上65個物件通過(上限)`)
+                stub.reset()
+                assert.strictEqual(await rjS(proc, mode, { id: { $in: withChain([], 63) } }), `invalid find of ${mode}, ${IRREG}`, `${L} 鏈上66個物件`)
+                assert.strictEqual(calls.length, 0, `${L} ORM不應被呼叫`)
+                //極長之鏈: 不逐層走完(成本有界)
+                let t = Date.now()
+                stub.reset()
+                assert.strictEqual(await rjS(proc, mode, { id: { $in: withChain([], 200000) } }), `invalid find of ${mode}, ${IRREG}`, `${L} 20萬層`)
+                assert.ok(Date.now() - t < 1000, `${L} 20萬層耗時 ${Date.now() - t} ms`)
+                //共用之長鏈陣列被引用多次(E x P 有界)
+                let shared = withChain([], 62)
+                t = Date.now()
+                stub.reset()
+                await quiet(() => proc('u1', 'tests', mode, { $or: Array.from({ length: 20000 }, () => shared) }))
+                assert.strictEqual(calls.length, 1, `${L} 共用長鏈陣列2萬次通過`)
+                assert.ok(Date.now() - t < 3000, `${L} 共用長鏈陣列2萬次耗時 ${Date.now() - t} ms`)
+            }
+        }
+    })
+
+    it('S15 mix之input本身: Proxy(含已撤銷者)、原型鏈有標籤者於讀取任何屬性之前整批reject, 陷阱0次; add、del、diff只取input之自有資料屬性(繼承者不取、不執行原型上之getter)(minimax F3)', async function() {
+        //規則7、R-INPUT-01 規則2; 修前: iseobj(input)讀標籤、input.add讀屬性, 對Proxy執行陷阱8次, 對繼承之存取器執行原型上之getter
+        let reads = 0
+        let counted = (target) => new Proxy(target, {
+            get(t, k, r) {
+                reads++
+                return Reflect.get(t, k, r)
+            },
+            has(t, k) {
+                reads++
+                return Reflect.has(t, k)
+            },
+            ownKeys(t) {
+                reads++
+                return Reflect.ownKeys(t)
+            },
+            getOwnPropertyDescriptor(t, k) {
+                reads++
+                return Reflect.getOwnPropertyDescriptor(t, k)
+            },
+        })
+        let revoked = () => {
+            let rv = Proxy.revocable({ add: [okRow()] }, {})
+            rv.revoke()
+            return rv.proxy
+        }
+        let NEED = 'invalid input of mix, need the result object of ltdtDiffByKey'
+        for (let { kind, proc } of getKinds().filter((v) => KINDS.includes(v.kind))) {
+            for (let [lab, mk] of [
+                ['Proxy', () => counted({ add: [okRow()] })],
+                ['已撤銷之Proxy', revoked],
+                ['原型鏈有標籤', () => Object.assign(Object.create(Object.assign(Object.create(null), { [Symbol.toStringTag]: 'X' })), { add: [okRow()] })],
+                ['自有標籤', () => ({ add: [okRow()], [Symbol.toStringTag]: 'X' })],
+            ]) {
+                stub.reset()
+                assert.strictEqual(await rjS(proc, 'mix', mk()), NEED, `${kind} ${lab}`)
+                assert.deepStrictEqual(calls, [], `${kind} ${lab} ORM不應被呼叫`)
+            }
+            assert.strictEqual(reads, 0, `${kind} 陷阱不被執行`)
+            //繼承之存取器add: 不取(原型上之getter不被執行); 無自有add、del、diff者為無操作
+            let inheritedReads = 0
+            class MixIn {
+                get add() {
+                    inheritedReads++
+                    return [okRow()]
+                }
+            }
+            let mi = Object.assign(new MixIn(), { diff: [{ id: 'f1', name: 'd' }] })
+            stub.reset()
+            await quiet(() => proc('u1', 'tests', 'mix', mi))
+            assert.strictEqual(inheritedReads, 0, `${kind} 原型上之getter不被執行`)
+            assert.deepStrictEqual(calls.map((v) => v.fn), ['save'], `${kind} 只處理自有之diff`)
+            //對照: 類別實例而add、del、diff為自有資料屬性者照常
+            class Plain {
+                constructor() {
+                    this.add = [{ id: 'n1', name: 'a' }]
+                }
+            }
+            stub.reset()
+            await quiet(() => proc('u1', 'tests', 'mix', new Plain()))
+            assert.deepStrictEqual(calls.map((v) => v.fn), ['insert'], `${kind} 類別實例照常`)
+        }
+    })
+
+    it('S14 被拒之批次容器與列再被呼叫端重用: 診斷輸出(真格式化, 非quiet)不執行inspect.custom與標籤getter, 同一物件第二次呼叫仍同結果, 物件不被改動(F09)', async function() {
+        //規則7、R-OBJ-01 規則6 ⑤ 延伸至寫入路徑; 修前若拒收路徑 console.log 原物件(util.inspect 讀標籤並呼叫 inspect.custom), 其副作用可在拒收後改動呼叫端物件
+        let reads = 0
+        let withProbe = (o) => {
+            o[util.inspect.custom] = () => {
+                reads++
+                return 'x'
+            }
+            return o
+        }
+        let items = [
+            ['原型鏈有標籤getter之陣列(容器)', 'container', () => withProbe(Object.setPrototypeOf([okRow()], Object.create(Array.prototype, {
+                [Symbol.toStringTag]: {
+                    get() {
+                        reads++
+                        return 'Array'
+                    },
+                },
+            })))],
+            ['有空洞之陣列(容器)', 'container', () => withProbe(Object.assign([okRow(), , okRow()], { extra: 1 }))], // eslint-disable-line no-sparse-arrays
+            ['索引為存取器之陣列(容器)', 'container', () => withProbe(Object.defineProperty([okRow()], 0, {
+                enumerable: true,
+                get() {
+                    reads++
+                    return okRow()
+                },
+            }))],
+            ['帶標籤與inspect之列', 'row', () => withProbe({ id: 'a1', [Symbol.toStringTag]: 'X' })],
+        ]
+        let logOrig = console.log
+        console.log = (...a) => {
+            util.format(...a) //同真 console.log 格式化引數後丟棄(不用 quiet: 其不格式化引數而測不出)
+        }
+        let done = 0
+        try {
+            for (let { kind, proc } of getKinds().filter((v) => KINDS.includes(v.kind))) {
+                for (let [lab, type, mk] of items) {
+                    let modes = type === 'container' ? ['insert', 'save', 'del', 'mix.add', 'mix.del', 'mix.diff'] : ['insert', 'save', 'mix.add', 'mix.diff']
+                    for (let mode of modes) {
+                        let obj = mk()
+                        let n = Reflect.ownKeys(obj).length
+                        let input = () => {
+                            if (mode.startsWith('mix.')) {
+                                return { [mode.slice(4)]: type === 'container' ? obj : [obj] }
+                            }
+                            return type === 'container' ? obj : [obj]
+                        }
+                        let call = () => proc('u1', 'tests', mode.startsWith('mix.') ? 'mix' : mode, input())
+                        let r1 = await getReject(call())
+                        let r2 = await getReject(call())
+                        assert.strictEqual(typeof r1, 'string', `${kind} ${lab} ${mode} 第1次`)
+                        assert.strictEqual(r2, r1, `${kind} ${lab} ${mode} 同一物件第2次同結果`)
+                        assert.strictEqual(Reflect.ownKeys(obj).length, n, `${kind} ${lab} ${mode} 物件未被改動`)
+                        done++
+                    }
+                    assert.strictEqual(reads, 0, `${kind} ${lab} 診斷輸出與檢查不執行使用端程式`)
+                }
+            }
+        }
+        finally {
+            console.log = logOrig
+        }
+        assert.strictEqual(done, 3 * (3 * 6 + 4), '完成數')
     })
 
 })
