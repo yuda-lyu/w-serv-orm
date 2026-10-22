@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    
+    <meta charset="utf-8">
+    <title>baseline.mjs - Documentation</title>
+    
+    
+    <script src="scripts/prettify/prettify.js"></script>
+    <script src="scripts/prettify/lang-css.js"></script>
+    <!--[if lt IE 9]>
+      <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+    <link type="text/css" rel="stylesheet" href="styles/prettify.css">
+    <link type="text/css" rel="stylesheet" href="styles/jsdoc.css">
+    <script src="scripts/nav.js" defer></script>
+    
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body>
+
+<input type="checkbox" id="nav-trigger" class="nav-trigger" />
+<label for="nav-trigger" class="navicon-button x">
+  <div class="navicon"></div>
+</label>
+
+<label for="nav-trigger" class="overlay"></label>
+
+<nav >
+    
+    
+    <h2><a href="index.html">Home</a></h2><h3>Classes</h3><ul><li><a href="WServOrm.html">WServOrm</a></li></ul><h3>Global</h3><ul><li><a href="global.html#buildBaseline">buildBaseline</a></li><li><a href="global.html#checkContract">checkContract</a></li><li><a href="global.html#compareBaseline">compareBaseline</a></li><li><a href="global.html#cyrb53">cyrb53</a></li><li><a href="global.html#digestRow">digestRow</a></li><li><a href="global.html#getRejectKey">getRejectKey</a></li><li><a href="global.html#isBaselineValid">isBaselineValid</a></li><li><a href="global.html#pickWriteRow">pickWriteRow</a></li></ul>
+    
+</nav>
+
+<div id="main">
+    
+    <h1 class="page-title">baseline.mjs</h1>
+    
+
+    
+
+
+
+    
+    <section>
+        <article>
+            <pre class="prettyprint source linenums"><code>//多人同時編輯之寫入契約: 列摘要與基準之純函數(規格 h1; 規則帳本 R-BASELINE-01)
+//
+//零 import、不使用任何 Node 專屬 API, 只依賴標準全域: 使用端(瀏覽器端與伺服端)以 w-serv-orm/src/baseline.mjs 深層匯入, 同一份原始碼算出同一摘要(規格 §8、V10)
+//語法限制為 ES2017 以內(不用 ?. 與 ?? 與 ** 與 BigInt 字面值): 使用端之舊版打包器(如 webpack 4)不轉譯 node_modules 內之檔案
+//物件之型別一律以 Object.prototype.toString 與原型鏈判定, 不用 instanceof: 跨 realm(iframe、vm)之 Date 與物件亦同結果
+//末尾須維持單一 export { ... } 敘述: 同構測試以文字替換該敘述後於 vm 執行
+//
+//版本凍結: 演算法與欄位政策同版(h1)凍結, 改動即開 h2(規格 §5); 不識之格式或版本一律拒收 baselineFormat, 不得降級為不帶基準
+//新增 h2 之作法: 新增 digestRowH2, 令 DIGESTERS 登錄 h2, isBaselineValid 之摘要格式改依登錄表判定, compareBaseline 以基準所載版本重算庫內列; h1 之函數與測試不動
+
+
+//BASELINE_VERSION, 目前產出之摘要版本前綴
+const BASELINE_VERSION = 'h1'
+
+//BASELINE_REJECT, 固定英文之拒收鍵, 各使用端轉為自身語系鍵, 一律提示重新載入
+const BASELINE_REJECT = Object.freeze({
+    mismatch: 'baselineMismatch',
+    rowNotFound: 'rowNotFound',
+    format: 'baselineFormat',
+})
+
+//摘要之16進位字元數: cyrb53為53位元, 16進位最多14字元, 補零至固定長度, 令格式可嚴格驗證
+const DIGEST_HEX_LEN = 14
+
+//單列走訪之深度與節點上限: 超過者拋錯(循環參考、共用子結構展開、異常巨大之欄位值), 不靜默
+const MAX_DEPTH = 100
+const MAX_NODES = 100000
+
+//契約允許之鍵: 其餘(含拼錯之鍵, 如 orderkey 會使列序政策靜默失效)一律拋錯
+const CONTRACT_KEYS = ['table', 'pk', 'fields', 'serverOnly', 'orderKey', 'scope']
+
+
+function hasOwn(o, k) {
+    return Object.prototype.hasOwnProperty.call(o, k)
+}
+
+
+function tagOf(v) {
+    return Object.prototype.toString.call(v)
+}
+
+
+function isPlainObj(v) {
+    //純物件: 標籤為Object, 原型為null或其原型之原型為null(本realm或他realm之Object.prototype); 類別實例之原型鏈較長, 不算
+    if (v === null || typeof v !== 'object' || tagOf(v) !== '[object Object]') {
+        return false
+    }
+    let p = Object.getPrototypeOf(v)
+    return p === null || Object.getPrototypeOf(p) === null
+}
+
+
+function isStrNe(v) {
+    return typeof v === 'string' &amp;&amp; v !== ''
+}
+
+
+function mkErrKey(key, msg) {
+    //帶固定拒收鍵之Error, 供呼叫端依key分流
+    let e = new Error(msg)
+    e.key = key
+    return e
+}
+
+
+/**
+ * cyrb53: 53位元非密碼學雜湊(純JS), 用途為一致性比對, 非安全邊界; 以UTF-16碼元逐一計算, 各引擎結果相同
+ *
+ * @param {String} str 輸入字串
+ * @param {Number} [seed=0] 輸入種子整數，預設0
+ * @returns {Number} 回傳0至2^53-1之整數
+ */
+function cyrb53(str, seed) {
+    let sd = typeof seed === 'number' ? seed : 0
+    let h1 = 0xdeadbeef ^ sd
+    let h2 = 0x41c6ce57 ^ sd
+    for (let i = 0; i &lt; str.length; i++) {
+        let ch = str.charCodeAt(i)
+        h1 = Math.imul(h1 ^ ch, 2654435761)
+        h2 = Math.imul(h2 ^ ch, 1597334677)
+    }
+    h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909)
+    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909)
+    return 4294967296 * (2097151 &amp; h2) + (h1 >>> 0)
+}
+
+
+function chkNames(v, label, allowEmpty) {
+    //欄位名陣列: 非空字串、不重複
+    if (!Array.isArray(v) || (!allowEmpty &amp;&amp; v.length === 0)) {
+        throw new Error(`invalid contract: ${label} needs ${allowEmpty ? 'an array' : 'a non-empty array'}`)
+    }
+    let seen = new Set()
+    for (let i = 0; i &lt; v.length; i++) {
+        if (!isStrNe(v[i])) {
+            throw new Error(`invalid contract: ${label}[${i}] needs a non-empty string`)
+        }
+        if (seen.has(v[i])) {
+            throw new Error(`invalid contract: ${label} has a duplicate name at [${i}]`)
+        }
+        seen.add(v[i])
+    }
+}
+
+
+/**
+ * 驗證寫入契約(不合者拋Error，不靜默)
+ *
+ * 規則: 須為純物件且只含 table、pk、fields、serverOnly、orderKey、scope 六鍵；pk 為非空字串；fields 為非空且不重複之非空字串陣列；
+ * serverOnly 若給予須為不重複之非空字串陣列且與 fields 無交集；orderKey 若給予須為非空字串，不得在 fields 內，亦不得等於 pk；scope 若給予須為函數；table 若給予須為非空字串。
+ * 契約以讀取當下之值驗證，不快取；建議使用端於啟動時對每份契約呼叫一次。
+ *
+ * @param {Object} contract 輸入寫入契約
+ * @returns {Boolean} 回傳true(不合者拋Error)
+ */
+function checkContract(contract) {
+    if (!isPlainObj(contract)) {
+        throw new Error('invalid contract: need an object')
+    }
+    //含不可列舉鍵與Symbol鍵(Object.keys只列可列舉之字串鍵, 會漏掉拼錯而不可列舉之鍵)
+    for (let k of Reflect.ownKeys(contract)) {
+        if (CONTRACT_KEYS.indexOf(k) &lt; 0) {
+            throw new Error('invalid contract: unsupported key')
+        }
+    }
+    if (!isStrNe(contract.pk)) {
+        throw new Error('invalid contract: pk needs a non-empty string')
+    }
+    chkNames(contract.fields, 'fields', false)
+    if (contract.serverOnly !== undefined &amp;&amp; contract.serverOnly !== null) {
+        chkNames(contract.serverOnly, 'serverOnly', true)
+        for (let f of contract.serverOnly) {
+            if (contract.fields.indexOf(f) >= 0) {
+                throw new Error('invalid contract: serverOnly and fields must not overlap')
+            }
+        }
+    }
+    if (contract.orderKey !== undefined &amp;&amp; contract.orderKey !== null) {
+        if (!isStrNe(contract.orderKey)) {
+            throw new Error('invalid contract: orderKey needs a non-empty string')
+        }
+        if (contract.fields.indexOf(contract.orderKey) >= 0) {
+            throw new Error('invalid contract: fields must not contain orderKey')
+        }
+        if (contract.orderKey === contract.pk) {
+            throw new Error('invalid contract: orderKey must not be pk')
+        }
+    }
+    if (contract.scope !== undefined &amp;&amp; contract.scope !== null &amp;&amp; typeof contract.scope !== 'function') {
+        throw new Error('invalid contract: scope needs a function')
+    }
+    if (contract.table !== undefined &amp;&amp; contract.table !== null &amp;&amp; !isStrNe(contract.table)) {
+        throw new Error('invalid contract: table needs a non-empty string')
+    }
+    return true
+}
+
+
+function canon(v, st, depth, label) {
+    //值之正規化並序列化為JSON文字(直接組字串, 不建中介物件: 鍵為__proto__時賦值會改設原型)
+    //巢狀值只依JSON語意: 物件鍵之值為undefined者略去(同JSON傳輸), 陣列之undefined元素為null, null與''各自保留不互相等價(遇歧義收嚴: 只有欄位頂層之空值等價)
+
+    st.n += 1
+    if (st.n > MAX_NODES) {
+        throw new Error(`unsupported value of ${label}: too many nodes`)
+    }
+    if (depth > MAX_DEPTH) {
+        throw new Error(`unsupported value of ${label}: too deep or circular`)
+    }
+
+    let t = typeof v
+
+    if (v === null || v === undefined) {
+        return 'null'
+    }
+    if (t === 'string') {
+        return JSON.stringify(v)
+    }
+    if (t === 'boolean') {
+        return v ? 'true' : 'false'
+    }
+    if (t === 'number') {
+        //NaN與±Infinity經JSON會靜默變成null, 與真正之null混同, 故拋錯
+        if (!isFinite(v)) {
+            throw new Error(`unsupported value of ${label}: non-finite number`)
+        }
+        return JSON.stringify(v)
+    }
+    if (t === 'bigint') {
+        return JSON.stringify(v.toString())
+    }
+
+    if (t === 'object') {
+
+        if (Array.isArray(v)) {
+            //陣列之自有可列舉非索引屬性(如toJSON函數)不入摘要, 但JSON傳輸時toJSON會改變內容而使兩端摘要不同, 故拋錯
+            let kv = Object.keys(v)
+            for (let i = 0; i &lt; kv.length; i++) {
+                let n = Number(kv[i])
+                if (!(String(n) === kv[i] &amp;&amp; n >= 0 &amp;&amp; n &lt; v.length &amp;&amp; Math.floor(n) === n)) {
+                    throw new Error(`unsupported value of ${label}: array with extra properties`)
+                }
+            }
+            let ss = []
+            for (let i = 0; i &lt; v.length; i++) {
+                ss.push(canon(v[i], st, depth + 1, label))
+            }
+            return '[' + ss.join(',') + ']'
+        }
+
+        let tag = tagOf(v)
+
+        if (tag === '[object Date]') {
+            let s
+            try {
+                s = Date.prototype.toISOString.call(v)
+            }
+            catch (e) {
+                throw new Error(`unsupported value of ${label}: invalid Date`)
+            }
+            return JSON.stringify(s)
+        }
+
+        if (isPlainObj(v)) {
+            let ks = Object.keys(v).sort() //預設排序為UTF-16碼元序, 不用localeCompare
+            let ss = []
+            for (let i = 0; i &lt; ks.length; i++) {
+                let vv = v[ks[i]]
+                if (vv === undefined) {
+                    continue
+                }
+                ss.push(JSON.stringify(ks[i]) + ':' + canon(vv, st, depth + 1, label))
+            }
+            return '{' + ss.join(',') + '}'
+        }
+
+        throw new Error(`unsupported value of ${label}: ${tag}`)
+    }
+
+    //function、symbol
+    throw new Error(`unsupported value of ${label}: ${t}`)
+}
+
+
+function canonField(v, st, label) {
+    //欄位頂層: undefined、null、''為同一空值, 其餘依canon; st為該列共用之節點計數
+    if (v === undefined || v === null || v === '') {
+        return 'null'
+    }
+    return canon(v, st, 0, label)
+}
+
+
+function isRowObj(row) {
+    //列須為物件(標籤為Object: 陣列、Map、Set、Date、RegExp等不算; 類別實例與Proxy包裝之一般物件照常, 只讀其自有屬性)
+    return row !== null &amp;&amp; typeof row === 'object' &amp;&amp; tagOf(row) === '[object Object]'
+}
+
+
+function digestOf(row, fields) {
+    //已驗證契約之單列摘要; 只讀自有屬性, 缺欄視為undefined
+    if (!isRowObj(row)) {
+        throw new Error('invalid row: need an object')
+    }
+    let ss = []
+    let st = { n: 0 }
+    for (let i = 0; i &lt; fields.length; i++) {
+        let f = fields[i]
+        ss.push(canonField(hasOwn(row, f) ? row[f] : undefined, st, `field[${f}]`))
+    }
+    let h = cyrb53('[' + ss.join(',') + ']').toString(16)
+    while (h.length &lt; DIGEST_HEX_LEN) {
+        h = '0' + h
+    }
+    return BASELINE_VERSION + ':' + h
+}
+
+
+/**
+ * 計算單列摘要(版本h1)
+ *
+ * 規則(規格 §5): 取 contract.fields 依宣告之序(orderKey與serverOnly不入)；每值正規化後以JSON陣列序列化，取cyrb53，回傳 'h1:' + 14位16進位(補零)。
+ * 欄位頂層之 undefined、null、'' 為同一空值(含缺欄)；Date 轉ISO字串；BigInt 轉十進位字串；物件鍵遞迴排序(UTF-16碼元序)，陣列保序；數字與字串不互轉(1 與 '1' 不同)；
+ * 巢狀值只依JSON語意(物件鍵之值為undefined者略去，陣列之undefined元素為null，巢狀之null與''不等價)；
+ * 其餘非JSON值(function、symbol、NaN、±Infinity、無效Date、Map、Set、RegExp、類別實例等)與超過深度100或單列節點10萬者拋Error，不靜默略過；列本身須為一般物件(陣列、Map、Set、Date等拋Error)。
+ *
+ * @param {Object} row 輸入列物件(只讀自有屬性，不執行原型上之getter)
+ * @param {Object} contract 輸入寫入契約，見checkContract
+ * @returns {String} 回傳摘要字串，如 'h1:0123456789abcd'
+ */
+function digestRow(row, contract) {
+    checkContract(contract)
+    return digestOf(row, contract.fields)
+}
+
+
+function pkOf(row, pk) {
+    //主鍵轉字串: 非空字串原樣、有限數字與BigInt轉十進位字串, 其餘(含空字串、null、undefined、布林、物件)為缺漏, 回傳null
+    //各後端回傳之主鍵型別不一(整數或字串), 轉字串使兩端同口徑; 依schema之轉型(R-ID-02)已由procOrm處理, 本函數只面對讀回之值
+    let v = hasOwn(row, pk) ? row[pk] : undefined
+    if (typeof v === 'string') {
+        return v === '' ? null : v
+    }
+    if (typeof v === 'number' &amp;&amp; isFinite(v)) {
+        return String(v)
+    }
+    if (typeof v === 'bigint') {
+        return v.toString()
+    }
+    return null
+}
+
+
+function orderOf(row, orderKey) {
+    //名次之排序值: 有限數字、BigInt、數字字串(非空白)依數值, 缺漏或無法轉數字者排最後(Infinity), 其間依主鍵碼元序決定性排列
+    //整數字串與BigInt保留為BigInt, 不轉Number(超過2^53即失精度而使不同名次被視為同值, 重排偵測漏判); BigInt與Number以 &lt; 與 > 比較為精確之數學比較
+    let v = hasOwn(row, orderKey) ? row[orderKey] : undefined
+    if (typeof v === 'number') {
+        return isFinite(v) ? v : Infinity
+    }
+    if (typeof v === 'bigint') {
+        return v
+    }
+    if (typeof v === 'string') {
+        let s = v.trim()
+        if (s === '') {
+            return Infinity
+        }
+        if (typeof BigInt === 'function' &amp;&amp; /^[+-]?\d+$/.test(s)) {
+            return BigInt(s)
+        }
+        let n = Number(s)
+        return isFinite(n) ? n : Infinity
+    }
+    return Infinity
+}
+
+
+/**
+ * 建立基準: 有序之 [[id, digest], ...]
+ *
+ * 規則(規格 §5): 先依 contract.scope 過濾(有則只留scope回傳真值之列)；主鍵依 pkOf 轉字串，同批重複或缺漏拋帶 key 為 'baselineFormat' 之Error；
+ * 排序: 有 orderKey 依 (order數值, 主鍵碼元序)，否則依主鍵碼元序，不用localeCompare；回傳陣列之序即名次: 他人重排會被偵測，系統重編號(名次不變)不會。
+ * 逐列存檔之基準即只含該列之 [[id, digest]]。
+ *
+ * @param {Array} rows 輸入列陣列(畫面所見之列，或伺服端新鮮讀取之列)
+ * @param {Object} contract 輸入寫入契約，見checkContract
+ * @returns {Array} 回傳 [[id, digest], ...]
+ */
+function buildBaseline(rows, contract) {
+    checkContract(contract)
+    if (!Array.isArray(rows)) {
+        throw new Error('invalid rows: need an array')
+    }
+
+    let fields = contract.fields
+    let hasScope = typeof contract.scope === 'function'
+    let hasOrder = isStrNe(contract.orderKey)
+
+    let items = []
+    let seen = new Set()
+    for (let k = 0; k &lt; rows.length; k++) {
+        let row = rows[k]
+        if (!isRowObj(row)) {
+            throw new Error(`invalid row: rows[${k}] needs an object`)
+        }
+        if (hasScope &amp;&amp; !contract.scope(row)) {
+            continue
+        }
+        let id = pkOf(row, contract.pk)
+        if (id === null) {
+            throw mkErrKey(BASELINE_REJECT.format, `invalid row: rows[${k}] has no valid primary key`)
+        }
+        if (seen.has(id)) {
+            throw mkErrKey(BASELINE_REJECT.format, `invalid row: rows[${k}] has a duplicate primary key`)
+        }
+        seen.add(id)
+        items.push({ id, o: hasOrder ? orderOf(row, contract.orderKey) : 0, d: digestOf(row, fields) })
+    }
+
+    items.sort((a, b) => {
+        if (a.o &lt; b.o) {
+            return -1
+        }
+        if (a.o > b.o) {
+            return 1
+        }
+        if (a.id !== b.id) {
+            return a.id &lt; b.id ? -1 : 1 //字串比較依UTF-16碼元序
+        }
+        return 0
+    })
+
+    return items.map((v) => [v.id, v.d])
+}
+
+
+/**
+ * 判斷基準格式是否合法(含版本)
+ *
+ * 合法: 陣列，每項為長度2之陣列 [非空字串id, 摘要字串]，摘要須為本模組已知版本之格式('h1:'加14位小寫16進位)，id不得重複；空陣列合法(空表)。
+ * 不識之格式或版本一律不合法，使用端不得降級為不帶基準。
+ *
+ * @param {*} baseline 輸入客戶端送入之基準
+ * @returns {Boolean} 回傳是否合法
+ */
+function isBaselineValid(baseline) {
+    if (!Array.isArray(baseline)) {
+        return false
+    }
+    let re = new RegExp('^' + BASELINE_VERSION + ':[0-9a-f]{' + DIGEST_HEX_LEN + '}$')
+    let seen = new Set()
+    for (let i = 0; i &lt; baseline.length; i++) {
+        let e = baseline[i]
+        if (!Array.isArray(e) || e.length !== 2 || !isStrNe(e[0]) || typeof e[1] !== 'string' || !re.test(e[1])) {
+            return false
+        }
+        if (seen.has(e[0])) {
+            return false
+        }
+        seen.add(e[0])
+    }
+    return true
+}
+
+
+/**
+ * 以基準比對目前之列(伺服端於表鎖內以新鮮讀取之列呼叫)
+ *
+ * 回傳 { ok: true }(相符：增、刪、改、名次皆無差異)，或 { ok: false, reason, added, removed, changed, reordered }：
+ * reason 為固定英文拒收鍵，baselineFormat(基準格式或版本不識；此時 added、removed、changed 為空陣列、reordered 為 false，未比對)、
+ * rowNotFound(基準只含一列且該列已不在目前之列、且無新增列：逐列存檔時該列已被刪)、baselineMismatch(其餘不符)；
+ * added 為基準沒有而目前有之id，removed 為基準有而目前已無之id，changed 為兩邊皆有而摘要不同之id，皆依各自陣列之序；
+ * reordered 為布林，兩邊共有之列其相對次序不同者為true(他人重排；系統重編號而名次不變者不算)。
+ * rowsNow 內之主鍵缺漏或重複拋 key 為 'rowsInvalid' 之Error(庫內資料異常，非客戶端之基準格式錯誤，不歸為baselineFormat)，值不可摘要者拋Error；契約不合者拋Error。
+ *
+ * @param {Array} rowsNow 輸入目前之列(表鎖內之新鮮讀取；經ORM快取之讀取不得用)
+ * @param {Array} baseline 輸入客戶端送入之基準 [[id, digest], ...]
+ * @param {Object} contract 輸入寫入契約，見checkContract
+ * @returns {Object} 回傳比對結果
+ */
+function compareBaseline(rowsNow, baseline, contract) {
+    checkContract(contract)
+
+    if (!isBaselineValid(baseline)) {
+        return { ok: false, reason: BASELINE_REJECT.format, added: [], removed: [], changed: [], reordered: false }
+    }
+
+    //庫內列之主鍵缺漏或重複為庫內資料異常, 非客戶端之基準格式錯誤: 以key為rowsInvalid之Error拋出, 使用端不得與baselineFormat(客戶端格式或版本不識)混為一類
+    let now
+    try {
+        now = buildBaseline(rowsNow, contract)
+    }
+    catch (e) {
+        if (e !== null &amp;&amp; typeof e === 'object' &amp;&amp; e.key === BASELINE_REJECT.format) {
+            let e2 = new Error(`invalid rowsNow: ${e.message}`)
+            e2.key = 'rowsInvalid'
+            throw e2
+        }
+        throw e
+    }
+
+    let mb = new Map(baseline)
+    let mn = new Map(now)
+
+    let added = []
+    let removed = []
+    let changed = []
+    for (let [id] of baseline) {
+        if (!mn.has(id)) {
+            removed.push(id)
+        }
+    }
+    for (let [id, d] of now) {
+        if (!mb.has(id)) {
+            added.push(id)
+        }
+        else if (mb.get(id) !== d) {
+            changed.push(id)
+        }
+    }
+
+    //reordered, 兩邊共有之id依各自次序之序列是否相同
+    let sb = baseline.map((v) => v[0]).filter((id) => mn.has(id))
+    let sn = now.map((v) => v[0]).filter((id) => mb.has(id))
+    let reordered = false
+    for (let i = 0; i &lt; sb.length; i++) {
+        if (sb[i] !== sn[i]) {
+            reordered = true
+            break
+        }
+    }
+
+    if (added.length === 0 &amp;&amp; removed.length === 0 &amp;&amp; changed.length === 0 &amp;&amp; !reordered) {
+        return { ok: true }
+    }
+
+    let reason = BASELINE_REJECT.mismatch
+    if (baseline.length === 1 &amp;&amp; removed.length === 1 &amp;&amp; added.length === 0) {
+        reason = BASELINE_REJECT.rowNotFound
+    }
+    return { ok: false, reason, added, removed, changed, reordered }
+}
+
+
+/**
+ * 取得寫入列(存檔採用客戶端值之欄位白名單): 只含 contract.pk 與 contract.fields 內且列上自有、值非undefined之欄位
+ *
+ * 規格 §4、V5: 伺服器專有欄位(serverOnly)與系統欄位存檔不採用客戶端值; 客戶端若持舊列(含舊之伺服器專有欄位值)整列送出,
+ * 寫入前須經此白名單,否則會把系統已改之值回寫成舊值。未列入 fields 者(含 orderKey)不輸出, 由使用端自行補(如依列序重編之 order)。
+ * 回傳新物件(淺複製, 巢狀值為同一參考; 寫入 ORM 時 ORM 自行複製)。
+ *
+ * @param {Object} row 輸入列物件
+ * @param {Object} contract 輸入寫入契約，見checkContract
+ * @returns {Object} 回傳只含白名單欄位之新物件
+ */
+function pickWriteRow(row, contract) {
+    checkContract(contract)
+    if (!isRowObj(row)) {
+        throw new Error('invalid row: need an object')
+    }
+    let o = {}
+    let ks = [contract.pk].concat(contract.fields)
+    for (let i = 0; i &lt; ks.length; i++) {
+        let k = ks[i]
+        if (hasOwn(row, k) &amp;&amp; row[k] !== undefined) {
+            //以defineProperty建立自有屬性, 不用賦值: 鍵為__proto__時賦值會改設原型
+            Object.defineProperty(o, k, { value: row[k], writable: true, enumerable: true, configurable: true })
+        }
+    }
+    return o
+}
+
+
+/**
+ * 取得拒收鍵: 同時處理 procOrm 之字串 reject(如 'rowNotFound')與 guardWrite 之 Error reject(帶 key)
+ *
+ * @param {*} err 輸入被 reject 之值
+ * @returns {String|null} 回傳拒收鍵字串; 不是字串亦無字串 key 者(如一般例外)回 null
+ */
+function getRejectKey(err) {
+    if (typeof err === 'string') {
+        return err
+    }
+    if (err !== null &amp;&amp; typeof err === 'object' &amp;&amp; typeof err.key === 'string') {
+        return err.key
+    }
+    return null
+}
+
+
+export { BASELINE_VERSION, BASELINE_REJECT, cyrb53, checkContract, digestRow, buildBaseline, isBaselineValid, compareBaseline, pickWriteRow, getRejectKey }
+</code></pre>
+        </article>
+    </section>
+
+
+
+
+    
+    
+</div>
+
+<br class="clear">
+
+<footer>
+    Documentation generated by <a href="https://github.com/jsdoc3/jsdoc">JSDoc 4.0.5</a> on Fri Oct 23 2026 00:29:00 GMT+0800 (台北標準時間) using the <a href="https://github.com/clenemt/docdash">docdash</a> theme.
+</footer>
+
+<script>prettyPrint();</script>
+<script src="scripts/polyfill.js"></script>
+<script src="scripts/linenumber.js"></script>
+
+
+
+</body>
+</html>

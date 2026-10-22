@@ -2,6 +2,7 @@ import iseobj from 'wsemi/src/iseobj.mjs'
 import pmSeries from 'wsemi/src/pmSeries.mjs'
 import isfun from 'wsemi/src/isfun.mjs'
 import checkOptRemoved from './checkOptRemoved.mjs'
+import { getOptProc } from './getMapOrm.mjs'
 
 
 function addFun(fs, f, name, useGuard = false) {
@@ -28,10 +29,17 @@ function addFun(fs, f, name, useGuard = false) {
 }
 
 
-async function procOrm(st, userId, woName, mode, input) {
+async function procOrm(st, userId, woName, mode, input, opt) {
     //封裝mapOrm, 依序執行擴充檢查、前處理、ORM操作與後處理, st為該實例之狀態
     //不做授權: 不檢查使用者亦不依使用者過濾數據, userId只供寫入稽核欄位與交給擴充函數; 開放給前端時須由開放處負責授權
     //st.mapOrm已於getProc建立st時驗證為函數, 且st不外露, 故此處不再檢查
+
+    //opt(第5參數: mustExist, R-ONLYMOD-01; keepUserId, R-KEEPUSER-01)先於任何擴充函數驗證: 無效之opt以固定字串拒收, 不得先執行擴充函數(其可能有寫入等副作用, 且check拋錯會遮蔽固定拒收字串);
+    //mapOrm內仍會再驗(直接使用getMapOrm者), 結果相同; opt不交給擴充函數(其參數物件形狀維持)
+    let optProc = getOptProc(mode, opt)
+    if (optProc.err !== null) {
+        return Promise.reject(optProc.err)
+    }
 
     //funChecks, 擴充檢查, 提供給各 mOrm[OOO].mjs 檢查
     await pmSeries(st.funChecks, (v) => {
@@ -50,7 +58,8 @@ async function procOrm(st, userId, woName, mode, input) {
     }
 
     //output
-    let output = await st.mapOrm(userId, woName, mode, input)
+    //opt(第5參數, R-ONLYMOD-01、R-KEEPUSER-01)交給mapOrm使用
+    let output = await st.mapOrm(userId, woName, mode, input, opt)
 
     //funPostProcessing, 擴充後處理output, 提供給各 mOrm[OOO].mjs 後處理
     //逐一呼叫, 各後處理皆收新建之參數物件, output為前一個之回傳值, 回傳值成為新output; 迭代前先取快照
@@ -96,8 +105,8 @@ function getProc(mapOrm, opt = {}) {
             //由外部添加擴充後置處理函數
             addFun(st.funPostProcessing, f, 'addFunPostProcessing')
         },
-        procOrm: async (userId, woName, mode, input) => {
-            return procOrm(st, userId, woName, mode, input)
+        procOrm: async (userId, woName, mode, input, opt) => {
+            return procOrm(st, userId, woName, mode, input, opt)
         },
     }
 }

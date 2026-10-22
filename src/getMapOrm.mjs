@@ -423,6 +423,119 @@ function getRowId(row) {
 }
 
 
+function hasOwnerUserId(row) {
+    //寫入列上之userId是否為擁有者: 只認自有、可列舉之資料屬性且為非空字串(與getRowId同一認定, 不執行getter), 其餘(缺欄、空字串、非字串、繼承、不可列舉)視為未提供
+    if (typeof row !== 'object' || row === null) {
+        return false
+    }
+    let d = Object.getOwnPropertyDescriptor(row, 'userId')
+    return d !== undefined && d.enumerable && !isAcc(d) && typeof d.value === 'string' && d.value !== ''
+}
+
+
+//procOrm第5參數opt允許之鍵(R-ONLYMOD-01、R-KEEPUSER-01), 皆為布林
+const OPT_KEYS_PROC = ['mustExist', 'keepUserId']
+
+//mustExist之存在檢查每次select之主鍵數上限(R-ONLYMOD-01 規則 11)
+const EXIST_CHUNK = 1000
+
+
+function getOptProc(mode, opt) {
+    //procOrm之第5參數opt: 未給(undefined、null)為空設定; 否則須為純物件且只含mustExist、keepUserId(皆布林), 其餘鍵、存取器、非布林者於任何讀寫之前reject
+    //拼錯之鍵(如mustexist)若被靜默忽略, 會令只改不增失效而重新長出已刪之列(keepUserId拼錯則擁有者被覆寫成操作者), 故fail-closed; 訊息不回顯呼叫端之值
+    //mustExist只適用save與del; keepUserId只適用insert(save現行即不覆寫userId, mix之新增為內部步驟不開放); 先逐一驗型別再驗mode, 結果與鍵之次序無關
+    let bad = (err) => ({ err, mustExist: false, keepUserId: false })
+    if (opt === undefined || opt === null) {
+        return { err: null, mustExist: false, keepUserId: false }
+    }
+    if (!isPlainObj(opt)) {
+        return bad('invalid opt of procOrm, need an object')
+    }
+    for (let k of Reflect.ownKeys(opt)) {
+        if (OPT_KEYS_PROC.indexOf(k) < 0) {
+            return bad('invalid opt of procOrm, unsupported key')
+        }
+    }
+    let flags = { mustExist: false, keepUserId: false }
+    for (let key of OPT_KEYS_PROC) {
+        let d = Object.getOwnPropertyDescriptor(opt, key)
+        if (d !== undefined) {
+            if (isAcc(d) || typeof d.value !== 'boolean') {
+                return bad(`invalid opt of procOrm, ${key} needs a boolean`)
+            }
+            flags[key] = d.value
+        }
+    }
+    if (flags.mustExist && mode !== 'save' && mode !== 'del') {
+        return bad('invalid opt of procOrm, mustExist supports only save and del')
+    }
+    if (flags.keepUserId && mode !== 'insert') {
+        return bad('invalid opt of procOrm, keepUserId supports only insert')
+    }
+    return { err: null, mustExist: flags.mustExist, keepUserId: flags.keepUserId }
+}
+
+
+async function hasMissingRow(wo, rows) {
+    //rows(寫入或刪除之列)是否有任一列不存在於資料表(含無有效主鍵者: 無從識別即視為不存在), 以select(id $in)分批查詢; true為有缺
+    //只認自有可列舉之資料屬性之id(getRowId), 與寫入與刪除實際使用之id同一; 比對以字串形式(整數主鍵與其字串視為同一)
+    //此讀取為ORM之select, ORM開啟useCache時可能非新鮮, 屬部署前提(單一行程、同表同一ORM實例、不經快取), 見規則帳本R-ONLYMOD-01
+    let ids = []
+    let seen = new Set()
+    for (let v of (isArr(rows) ? rows : [rows])) {
+        let id = getRowId(v)
+        if (!((typeof id === 'string' && id !== '') || isIdNumFinite(id))) {
+            return true
+        }
+        if (!seen.has(String(id))) {
+            seen.add(String(id))
+            ids.push(id)
+        }
+    }
+    //分批查詢: 各w-orm-*共用之條件檢核(wsemi cvOrmFind)限$in之元素數(預設10000, 只可下調), 超過者整批reject; 每批EXIST_CHUNK個, 任一批有缺即止
+    for (let k = 0; k < ids.length; k += EXIST_CHUNK) {
+        let part = ids.slice(k, k + EXIST_CHUNK)
+        let rs = await wo.select({ id: { $in: part } })
+        let found = new Set(map(isArr(rs) ? rs : [], (r) => String(get(r, 'id'))))
+        if (part.some((id) => !found.has(String(id)))) {
+            return true
+        }
+    }
+    return false
+}
+
+
+function getItemsDupId(rows) {
+    //mustExist之del: 同批重複之有效主鍵(第2次以後出現者)之位置[{k}]; 無效主鍵者不計(由存在檢查處置)
+    //重複者若放行, 第1筆刪除後第2筆必未命中, 事後偵測雖會reject卻已刪除, 違反[任一列不存在即零刪除], 故於刪除之前整批拒絕
+    let seen = new Set()
+    let rs = []
+    let arr = isArr(rows) ? rows : [rows]
+    for (let k = 0; k < arr.length; k++) {
+        let id = getRowId(arr[k])
+        if (!((typeof id === 'string' && id !== '') || isIdNumFinite(id))) {
+            continue
+        }
+        let s = String(id)
+        if (seen.has(s)) {
+            rs.push({ k })
+        }
+        else {
+            seen.add(s)
+        }
+    }
+    return rs
+}
+
+
+function hasNoHit(r, keyDel) {
+    //ORM之逐筆結果是否有已正常處理(ok非0)而未命中者(n為0; keyDel非null者另認該鍵為0, 如del之nDeleted): 表鎖紀律被破壞(檢查後、寫入前列被他方刪除)時之事後偵測
+    return (isArr(r) ? r : [r]).some((x) => {
+        return x !== null && typeof x === 'object' && x.ok !== 0 && (x.n === 0 || (keyDel !== null && x[keyDel] === 0))
+    })
+}
+
+
 function firstBadIndex(a) {
     //陣列首個空洞或存取器索引, 回傳[索引, 'sparse'|'accessor'], 無則null; 成本為該索引之位置, 稀疏巨陣列於索引0即返回
     //索引為存取器者, 其後各步驟(each、map以array[index]讀取)會執行使用端程式並可每次回傳不同列(外審 sol F01)
@@ -922,7 +1035,7 @@ function setOwnData(o, k, v) {
 }
 
 
-function adjustData(ds, woName, userId, data, mode = 'save') { //mode: 'insert', 'save', 'insert+save'
+function adjustData(ds, woName, userId, data, mode = 'save', keepUserId = false) { //mode: 'insert', 'save', 'insert+save'; keepUserId只由insert傳true(R-KEEPUSER-01)
 
     //check
     if (!iseobj(ds)) {
@@ -946,9 +1059,12 @@ function adjustData(ds, woName, userId, data, mode = 'save') { //mode: 'insert',
     //userId, timeCreate
     if (mode.indexOf('insert') >= 0) {
 
-        //userId
+        //userId, keepUserId者(opt.keepUserId, 列上userId為擁有者而非建立者)逐列保留自有非空字串之userId, 其餘以操作者補; userIdUpdate不受影響, 恆為操作者
         if (keys.indexOf('userId') >= 0) {
             each(data, (v, k) => {
+                if (keepUserId && hasOwnerUserId(data[k])) {
+                    return
+                }
                 setOwnData(data[k], 'userId', userId)
             })
         }
@@ -1028,11 +1144,11 @@ function adjustData(ds, woName, userId, data, mode = 'save') { //mode: 'insert',
 }
 
 
-async function mapOrm(ds, woItems, userId, woName, mode, input) {
+async function mapOrm(ds, woItems, userId, woName, mode, input, opt) {
     //邊界保證(R-ERR-01 規則5): execMapOrm之檢查、轉型與ORM呼叫階段, 非字串之例外(RangeError、使用端物件之Proxy陷阱/toString拋錯、woItems之非ORM值等)
     //一律console.log原文後以固定字串reject, 不轉出例外物件與其拋出之值; 字串(各處之固定訊息)原樣轉出
     try {
-        return await execMapOrm(ds, woItems, userId, woName, mode, input)
+        return await execMapOrm(ds, woItems, userId, woName, mode, input, opt)
     }
     catch (e) {
         if (typeof e === 'string') {
@@ -1044,7 +1160,7 @@ async function mapOrm(ds, woItems, userId, woName, mode, input) {
 }
 
 
-async function execMapOrm(ds, woItems, userId, woName, mode, input) {
+async function execMapOrm(ds, woItems, userId, woName, mode, input, opt) {
     //由woName自動綁定至woItems內的ORM物件
     let err = null
     let r
@@ -1064,6 +1180,12 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input) {
 
     //idCast, 主鍵之有限數字以其字串形式處置(R-ID-02), 寫入、刪除與查詢條件共用同一判定
     let idCast = isIdCast(ds, woName)
+
+    //optProc, 第5參數opt(只改不增、刪除回報未命中, R-ONLYMOD-01), 於任何讀寫之前檢查
+    let optProc = getOptProc(mode, opt)
+    if (optProc.err !== null) {
+        return Promise.reject(optProc.err)
+    }
 
     if (mode === 'select') {
 
@@ -1130,12 +1252,29 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input) {
 
         //adjustData
         try {
-            input = adjustData(ds, woName, userId, input, mode)
+            input = adjustData(ds, woName, userId, input, mode, optProc.keepUserId)
         }
         catch (e) {
             console.log(`${woName}.adjustData catch`, e.toString())
             err = 'failed to adjust data'
             return Promise.reject(err)
+        }
+
+        //exist, 只改不增(opt.mustExist, R-ONLYMOD-01): 寫入之前檢查全部列(含補主鍵後)皆已存在, 任一列不存在(含無主鍵之列)即整批reject 'rowNotFound'而不寫入任何一筆
+        //檢查與寫入非原子, 呼叫端須已持有該表之表鎖(withTabLocks、guardWrite)
+        if (mode === 'save' && optProc.mustExist) {
+            let missing = await hasMissingRow(wo, input)
+                .catch((msg) => {
+                    console.log(`${woName}.save exist check catch`, msg)
+                    err = 'failed to save data'
+                })
+            if (isestr(err)) {
+                return Promise.reject(err)
+            }
+            if (missing) {
+                console.log(`${woName}.save row not found`)
+                return Promise.reject('rowNotFound')
+            }
         }
 
         //save
@@ -1147,7 +1286,8 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input) {
                 })
         }
         else if (mode === 'save') {
-            r = await wo.save(input)
+            //只改不增者轉傳autoInsert:false(各ORM於未命中時不寫入); 其餘維持單參數呼叫
+            r = await (optProc.mustExist ? wo.save(input, { autoInsert: false }) : wo.save(input))
                 .catch((msg) => {
                     console.log(`${woName}.save catch`, msg)
                     err = 'failed to save data'
@@ -1166,6 +1306,12 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input) {
             if (size(fails) > 0) {
                 console.log(`${woName}.save fail`, fails)
                 return Promise.reject(getMsgFail('failed to save data', getItemsFail(r, inputOrig)))
+            }
+
+            //check, 只改不增者之事後偵測: 逐筆n為0表檢查後、寫入前該列被他方刪除(表鎖紀律被破壞), 已寫入之筆無從回復, 仍回報rowNotFound
+            if (optProc.mustExist && hasNoHit(r, null)) {
+                console.log(`${woName}.save row not found after check`)
+                return Promise.reject('rowNotFound')
             }
         }
 
@@ -1195,6 +1341,31 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input) {
             input = castIdRows(input)
         }
 
+        //exist, 刪除回報未命中(opt.mustExist, R-ONLYMOD-01): 刪除之前檢查全部列皆存在, 任一列不存在(含無主鍵之列)即整批reject 'rowNotFound'而不刪除任何一筆
+        //檢查與刪除非原子, 呼叫端須已持有該表之表鎖(withTabLocks、guardWrite)
+        if (optProc.mustExist) {
+
+            //check, 同批重複主鍵整批拒絕, 訊息列其位置而不回顯主鍵(同R-MIX-01)
+            let failsDup = getItemsDupId(input)
+            if (size(failsDup) > 0) {
+                console.log(`${woName}.del duplicate id`, failsDup)
+                return Promise.reject(getMsgFail('invalid input of del, duplicate id', failsDup))
+            }
+
+            let missing = await hasMissingRow(wo, input)
+                .catch((msg) => {
+                    console.log(`${woName}.del exist check catch`, msg)
+                    err = 'failed to delete data'
+                })
+            if (isestr(err)) {
+                return Promise.reject(err)
+            }
+            if (missing) {
+                console.log(`${woName}.del row not found`)
+                return Promise.reject('rowNotFound')
+            }
+        }
+
         //del
         r = await wo.del(input)
             .catch((msg) => {
@@ -1209,6 +1380,12 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input) {
                 console.log(`${woName}.del fail`, fails)
                 err = getMsgFail('failed to delete data', fails)
             }
+        }
+
+        //check, 刪除回報未命中者之事後偵測: 逐筆nDeleted或n為0表檢查後、刪除前該列被他方刪除(表鎖紀律被破壞), 已刪除之筆無從回復, 仍回報rowNotFound
+        if (!isestr(err) && optProc.mustExist && hasNoHit(r, 'nDeleted')) {
+            console.log(`${woName}.del row not found after check`)
+            err = 'rowNotFound'
         }
 
     }
@@ -1465,11 +1642,12 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input) {
 
 
 function getMapOrm(ds, woItems) {
-    //每次呼叫各自綁定ds與woItems並回傳新函數, 令同一行程內之多個實例互不干擾; 回傳函數之參數形狀維持(userId, woName, mode, input)
-    return async (userId, woName, mode, input) => {
-        return mapOrm(ds, woItems, userId, woName, mode, input)
+    //每次呼叫各自綁定ds與woItems並回傳新函數, 令同一行程內之多個實例互不干擾; 回傳函數之參數形狀為(userId, woName, mode, input, opt), 前四個維持, opt為選用(R-ONLYMOD-01)
+    return async (userId, woName, mode, input, opt) => {
+        return mapOrm(ds, woItems, userId, woName, mode, input, opt)
     }
 }
 
 
+export { getOptProc }
 export default getMapOrm
