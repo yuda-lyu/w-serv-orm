@@ -91,3 +91,32 @@
 - **評估「save 是否也覆寫」之法**: 讀 `adjustData` 之 mode 分支,不憑印象——insert 區塊(`mode.indexOf('insert') >= 0`)設 `userId`、`timeCreate`、`userIdUpdate`、`timeUpdate`;save 只在 `insert || save` 區塊設 `userIdUpdate`、`timeUpdate`.save 不碰 `userId`,故擁有者語意之欄在 save 不被操作者覆寫,K14/A06 以實測鎖定;mix 之新增走 `'insert+save'` 會覆寫 `userId`,但為內部步驟,同 `mustExist` 不開放.
 - **工作樹 CRLF、HEAD 為 LF**(Windows autocrlf): 變異腳本對工作樹檔套多行 find 前,先 `replace(/\r\n/g, '\n')`(副本改 LF 後再寫入)最單純;否則 5/25 個變異以「find 出現 0 次」誤判.Edit 工具會保持原檔之行尾,不需自行處理.
 - **變異挑選**: 對測試標題宣稱之每個組合各配一變異(逐列判定→只看第 1 列;空字串/非字串/繼承/不可列舉→各放寬一條件;單純空白→trim;驗證點→拿掉起首驗證/拿掉 mapOrm 內驗證/驗證挪到寫入之後;型別先於 mode→次序顛倒;`false` 於非 insert 不得被拒→只看鍵存在).`hasOwnerUserId` 之 `isAcc(d)` 與 `getOptProc` 之 `isAcc(d) ||` 為等價變異(存取器之 `d.value` 恆 undefined,另一條件已擋),未列入.
+
+## orm-run03: insert 與 mix 之 add 增判聚合結果 `ok:0`(2026-10-23)
+
+規則見 `rulebook_error-input.md` R-PERITEM-01 規則 4.以下只記往後會再用到的經驗.
+
+- **本套件裝不到 w-orm-lmdb**: 套件 devDependencies 只有 w-orm-lowdb,建議書附之重現腳本(用 `new WOrm(opt)` 包 lmdb)不能原樣跑.改以 `WOrm(...args)` 包 lowdb(w-orm-* 匯出之 `WOrm` 是工廠函數、被 WServOrm 以 `WOrm(...)` 不帶 new 呼叫;包裝時對回傳物件的 `insert`/`save`/`del` 直接換成注入版即可),同一組注入腳本(`tmp/orm-run03/repro.mjs`)一次實測 insert、save、del、mix 之 add/del/diff 六路,修前 insert 與 mix-add 兩路 RESOLVED、其餘四路 REJECTED,修後只有那兩路翻轉.
+- **用「恆 false 的判定函數」同時做修前紅與變異**: 把 `isInsertFail` 的回傳改成 `false && …` 即等同修前行為(新測試 5 紅 3 綠: 3 綠為邊界/對照案),不必另做 HEAD 副本;再依呼叫站各停用一個(單獨 insert 站 → U19b、U19d、F01 紅;mix 站 → U17b、F02 紅)與把 `ok === 0` 放寬為 `!ok`(→ U17c、U19c 紅),確認兩個呼叫站與判準各有測試把關.
+- **mix 的 add 是首步**: add 整批性失敗時尚無其他步驟寫入,立即 reject 不會留下「add 失敗但 del 已執行」的半成品;F02 以真 lowdb 鎖定 x3 仍在庫內.與 del、diff 的逐筆失敗(待全部步驟完成後一併 reject)語意不同,不要誤改成併入 msgsFail.
+- **判準刻意只認「聚合物件的 ok 恆等於 0」**: undefined、null、陣列(含元素 ok 為 0 者)、無 ok 鍵、ok 為 1(含 n 為 0 的略過)一律維持舊行為;U17c、U19c 逐一鎖定,避免把替身 ORM 或舊後端的各種回傳形狀誤判為失敗.(run04 起「陣列含元素 ok 為 0」改判失敗,見下.)
+
+## orm-run04: insert 失敗判準擴及陣列形,並套用於 recover(2026-10-23)
+
+規則見 `rulebook_error-input.md` R-PERITEM-01 規則 4、`rulebook_runtime.md` R-DB-01 規則 3.以下只記往後會再用到的經驗.
+
+- **同一判準的多個入口要抽成單一謂詞**: run03 把判準寫成 getMapOrm.mjs 的區域函數,run04 要讓 recover 共用時才抽成 `src/isInsertFail.mjs`.備份還原檔不該反向 import 重量級的 getMapOrm,新增小模組最乾淨;往後凡要在 procOrm 與工具路徑(backup/recover/genTestData)共用的判讀,直接放獨立 `src/` 小模組.
+- **改既有測試的預期要明標**: run03 的 U17c、U19c 曾鎖「陣列含 ok 為 0 仍 resolve」,run04 依主控裁示翻轉,測試改為「陣列逐筆皆無 ok 為 0」並在帳本測試行註明,不是放寬測試而是規格改變.
+- **recover 失敗形狀的取捨**: 維持「逐表、失敗即停、先前之表已寫入」,只改善回報(列失敗表與先前已寫入之表).不做整體回復(前提為資料庫先清空,以 delAll 回復有誤刪風險),也不做「失敗後繼續寫其餘表」(擴大不一致).訊息含 ORM 回傳原文(伺服器端工具,同 genTestData),逐筆陣列比照 getMsgFail 限前 10 筆並附總數,避免整表失敗時訊息暴長.
+- **變異驗證用副本腳本**(run05 沿用於 `tmp/orm-run05/mutate.mjs`,18 個變異): `tmp/orm-run04/mutate.mjs` 複製 src、schema、test/tools 與指定測試檔到 `tmp/orm-run04/mut/<名>/`,對副本做單一替換後以 repo 之 mocha 在該夾跑(cwd 設副本夾,`./test/_tmp/...` 才落在副本內),一次 13 個變異、為每個變異預寫「應被抓到的測試編號」並自動比對漏抓.工作樹為 CRLF,替換前先轉 LF;find 字串須恰出現 1 次否則回報 ERROR.
+
+## orm-run05: 全站點盤點 ORM 回傳之失敗檢查(2026-10-23)
+
+規則見 `rulebook_error-input.md` R-ORM-RESULT-01(含 19 站表).以下只記往後會再用到的經驗.
+
+- **「補一處」在 run03、run04 各追出下一處,根因是沒有站點全集**: 先盤點再補才收斂.盤點用「`.方法(` 正則 + 逐行去註解」,並以測試鎖定(`test/unit-ormsites.test.mjs` O01 比對各檔各方法之呼叫次數,O02 禁括號記法,O03 限一處建構),之後新增 ORM 呼叫就會失敗而被迫歸類.計次比行號穩,行號會因無關修改位移.
+- **「可表達失敗」要回契約查,不能憑印象**: run04 我寫「createStorage 回傳未檢查」是看到呼叫後沒接檢查就下結論;回查 w-orm-mdb、w-orm-reladb 的 JSDoc 與程式,它回狀態字串(`'created'`、`'existed'`),失敗一律 reject(reladb 以 `si.err` reject),沒有 `ok` 可檢,故不適用.判準線: 契約回傳含 `ok` 的寫入類(insert、save、del、delAll)才檢;`select` 回數據列,列內欄位可能就叫 `ok`,套用謂詞會把正常資料誤判為失敗,這一條要寫進規則,否則下一個人會「順手」補上.
+- **判準與呼叫形狀無關**: 契約為陣列的 save/del 也可能被違約 ORM 回聚合物件,契約為聚合的 delAll/insert 也可能回陣列;`isOrmFail` 不論函數一律判兩種形狀.save/del 的處置: 陣列形仍走原逐筆訊息(列主鍵),聚合形無從列出而用固定字串,故 `getItemsFail` 之後接 `else if (isOrmFail(r))` 即可,不重複判陣列.
+- **mustExist 的次序**: `hasNoHit` 只認 `ok !== 0` 者,聚合 `ok:0` 若不先攔會被當成「沒命中」以外的別的路徑;在事後偵測之前先判 `isOrmFail`,使違約回 `failed to save data`/`failed to delete data` 而非誤報 `rowNotFound`(U24d 鎖定).
+- **外部站點只記不改**: w-data-collector 的 `funTestAndSave` 在其套件內呼叫 save,只做陣列檢查;本套件不得改他套件,也不宜用 Proxy 包 woItems 去補(繞道),列入帳本 E2 與 state 之外部缺口,交主控決定是否通報.
+- **更名謂詞時的連帶**: `isInsertFail` 從 run03 起存在,run05 泛用後更名 `isOrmFail`: 檔、測試檔(`unit-isInsertFail` → `unit-isOrmFail`)、帳本與 state 之引用、變異腳本之 find 字串都要同步;舊名只留在歷史經驗與決策紀錄中.

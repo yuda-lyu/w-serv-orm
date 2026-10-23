@@ -4,6 +4,7 @@ import isbol from 'wsemi/src/isbol.mjs'
 import isfun from 'wsemi/src/isfun.mjs'
 import pmSeries from 'wsemi/src/pmSeries.mjs'
 import getItemsFail from 'w-data-collector/src/getItemsFail.mjs'
+import isOrmFail from './isOrmFail.mjs'
 
 
 async function genTestData(ds, woItems, opt = {}) {
@@ -52,6 +53,11 @@ async function genTestData(ds, woItems, opt = {}) {
             let fails = getItemsFail(rss, rs)
             if (size(fails) > 0) {
                 throw new Error(`failed to write test data into table[${k}]: ${JSON.stringify(fails)}`)
+            }
+
+            //check, 回傳聚合物件而ok為0(非契約形狀)者無從逐筆列出, 仍視為失敗, 內文列ORM回傳原文(R-ORM-RESULT-01)
+            if (isOrmFail(rss)) {
+                throw new Error(`failed to write test data into table[${k}]: ${JSON.stringify(rss)}`)
             }
 
             if (bLog) {

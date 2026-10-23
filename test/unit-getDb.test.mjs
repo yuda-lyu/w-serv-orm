@@ -31,6 +31,26 @@ function mkWoItems(log, behavior = {}) {
     }
 }
 
+//多表替身: results[表名]為該表insert之回傳函數(未給則回契約內之成功結果)
+function mkWoItemsMulti(log, results = {}) {
+    let woItems = {}
+    for (let name of ['t1', 't2', 't3']) {
+        woItems[name] = {
+            select: async () => [],
+            insert: async (d) => {
+                log.push({ fn: 'insert', table: name, d })
+                if (results[name]) {
+                    return results[name](d)
+                }
+                return { n: d.length, nInserted: d.length, ok: 1 }
+            },
+        }
+    }
+    return woItems
+}
+
+let BK3 = [{ name: 't1', data: [{ id: 'a' }] }, { name: 't2', data: [{ id: 'b' }, { id: 'c' }] }, { name: 't3', data: [{ id: 'd' }] }]
+
 async function getReject(pm) {
     try {
         await pm
@@ -129,6 +149,64 @@ describe('getDb備份與還原', function() {
         let fp = writeBackup('ok.json', JSON.stringify([{ name: 'tests', data: [{ id: 'a' }] }]))
         await quiet(() => getDb.recover(mkWoItems(log), fp, { bLog: false }))
         assert.strict.deepEqual(log, [{ fn: 'insert', table: 'tests', d: [{ id: 'a' }] }])
+    })
+
+    it('B05b recover之insert聚合結果ok為0即reject Error並停止, 先前之表已寫入、之後之表不寫入', async function() {
+        //R-DB-01 規則3(orm-run04): ORM回報失敗不得當成功; 錯誤型別為Error(R-ERR-01規則2); 訊息含失敗表名、ORM回傳原文與先前已寫入之表
+        let log = []
+        let fp = writeBackup('fail-agg.json', JSON.stringify(BK3))
+        let woItems = mkWoItemsMulti(log, { t2: (d) => ({ n: d.length, nInserted: 0, ok: 0, err: 'E-ins' }) })
+        let err = await quiet(() => getReject(getDb.recover(woItems, fp, { bLog: false })))
+        assert.ok(err instanceof Error)
+        assert.strict.equal(err.message, 'failed to recover data into table[t2]: {"n":2,"nInserted":0,"ok":0,"err":"E-ins"}; tables already written: t1')
+        assert.strict.deepEqual(log.map((v) => v.table), ['t1', 't2'])
+    })
+
+    it('B05c recover之insert陣列形逐筆ok為0即reject Error, 訊息列失敗筆', async function() {
+        //R-DB-01 規則3(orm-run04): 陣列形(非契約形狀)任一筆ok為0同聚合形處置; 失敗筆取輸入同位置數據之id(getItemsFail)
+        let log = []
+        let fp = writeBackup('fail-arr.json', JSON.stringify(BK3))
+        let woItems = mkWoItemsMulti(log, { t2: () => [{ n: 1, nInserted: 0, ok: 0, err: 'E-ins' }, { n: 1, nInserted: 1, ok: 1 }] })
+        let err = await quiet(() => getReject(getDb.recover(woItems, fp, { bLog: false })))
+        assert.ok(err instanceof Error)
+        assert.strict.equal(err.message, 'failed to recover data into table[t2]: [{"k":0,"id":"b","err":"E-ins"}]; tables already written: t1')
+        assert.strict.deepEqual(log.map((v) => v.table), ['t1', 't2'])
+    })
+
+    it('B05d recover之首表失敗無已寫入之表可列, 失敗筆超過10筆僅列前10筆並附總數', async function() {
+        //R-DB-01 規則3(orm-run04): 同getMsgFail之上限(10筆)
+        let log = []
+        let rows = []
+        for (let i = 1; i <= 12; i++) {
+            rows.push({ id: `r${i}` })
+        }
+        let fp = writeBackup('fail-many.json', JSON.stringify([{ name: 't1', data: rows }, { name: 't2', data: [{ id: 'b' }] }]))
+        let woItems = mkWoItemsMulti(log, { t1: (d) => d.map(() => ({ n: 1, nInserted: 0, ok: 0, err: 'E-full' })) })
+        let err = await quiet(() => getReject(getDb.recover(woItems, fp, { bLog: false })))
+        let fails = rows.slice(0, 10).map((v, k) => ({ k, id: v.id, err: 'E-full' }))
+        assert.strict.equal(err.message, `failed to recover data into table[t1]: ${JSON.stringify(fails)}, ... (12 in total)`)
+        assert.strict.deepEqual(log.map((v) => v.table), ['t1'])
+    })
+
+    it('B05e recover之insert無失敗(略過既有主鍵、回傳undefined、null、空物件、空陣列、逐筆皆ok為1)照舊resolve並寫入全部表', async function() {
+        //R-DB-01 規則3(orm-run04): 只認聚合物件ok為0與陣列內任一筆ok為0, 其餘維持舊行為
+        for (let rIns of [{ n: 0, nInserted: 0, ok: 1 }, undefined, null, {}, [], [{ n: 1, nInserted: 1, ok: 1 }]]) {
+            let log = []
+            let fp = writeBackup('ok-shapes.json', JSON.stringify(BK3))
+            let woItems = mkWoItemsMulti(log, { t2: () => rIns })
+            await quiet(() => getDb.recover(woItems, fp, { bLog: false }))
+            assert.strict.deepEqual(log.map((v) => v.table), ['t1', 't2', 't3'], JSON.stringify(rIns))
+        }
+    })
+
+    it('B05f 低階recover之insert失敗亦reject Error', async function() {
+        //R-DB-01 規則3(orm-run04): WServOrm實例上之recover即此低階函數
+        let log = []
+        let fp = writeBackup('fail-low.json', JSON.stringify(BK3))
+        let woItems = mkWoItemsMulti(log, { t3: (d) => ({ n: d.length, nInserted: 0, ok: 0 }) })
+        let err = await quiet(() => getReject(br.recover(fp, woItems)))
+        assert.ok(err instanceof Error)
+        assert.strict.equal(err.message, 'failed to recover data into table[t3]: {"n":1,"nInserted":0,"ok":0}; tables already written: t1, t2')
     })
 
     it('B06 recover之bRela缺ds或genModelsByTabs即於寫入前reject', async function() {

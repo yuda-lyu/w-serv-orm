@@ -109,7 +109,7 @@ async function backup(woItems, opt = {}) {
 
 
 async function recover(woItems, fp, opt = {}) {
-    //由備份檔以insert還原各資料表; 主鍵已存在者略過, 故資料表須先清空; 逐表寫入, 中途失敗時先前之表已寫入
+    //由備份檔以insert還原各資料表; 主鍵已存在者略過, 故資料表須先清空; 逐表寫入, 中途失敗(含insert回報ok為0, 見isOrmFail)時先前之表已寫入, 之後之表不寫入
     //失敗時印log後reject原錯誤; bRela為true時須提供opt.ds與opt.genModelsByTabs以產生model
 
     //bRela, 是否為關聯資料庫

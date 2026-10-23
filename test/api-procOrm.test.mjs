@@ -92,3 +92,145 @@ describe('procOrm接w-orm-lowdb', function() {
     })
 
 })
+
+
+//R-PERITEM-01 規則4(orm-run03、run04): 包一層真ORM(w-orm-lowdb), 令insert於injectInsert為true時第0筆不寫入、其餘筆照常寫入, 並回傳聚合物件而ok為0; 為'array'時回傳逐筆陣列而第0筆ok為0(模擬違約之ORM, w-orm-lowdb實際不會如此); 其餘操作原樣
+let fdIns = './test/_tmp/api-procOrm-insertfail'
+let injectInsert = false
+//R-ORM-RESULT-01(orm-run05): injectOther為'save'、'del'或'delAll'時, 該操作照常執行後回傳聚合物件而ok為0(非契約形狀, 模擬違約之ORM)
+let injectOther = null
+function WOrmInsertFail(...args) {
+    let wo = WOrm(...args)
+    for (let m of ['save', 'del', 'delAll']) {
+        let orig = wo[m]
+        wo[m] = async (...a) => {
+            let r = await orig(...a)
+            return injectOther === m ? { n: 1, ok: 0, err: 'E-agg' } : r
+        }
+    }
+    let insertOrig = wo.insert
+    wo.insert = async (data) => {
+        if (!injectInsert) {
+            return insertOrig(data)
+        }
+        let rows = Array.isArray(data) ? data : [data]
+        let rest = rows.slice(1)
+        if (rest.length > 0) {
+            await insertOrig(rest)
+        }
+        if (injectInsert === 'array') {
+            return rows.map((v, k) => (k === 0 ? { n: 1, nInserted: 0, ok: 0, err: 'E-ins' } : { n: 1, nInserted: 1, ok: 1 }))
+        }
+        return { n: rows.length, nInserted: rest.length, ok: 0, err: 'E-ins' }
+    }
+    return wo
+}
+
+
+describe('procOrm接insert回報ok為0之w-orm-lowdb', function() {
+
+    let so = null
+    let proc = (mode, input) => so.procOrm('u1', 'tests', mode, input)
+    let getIds = async () => (await so.woItems.tests.select({})).map((v) => v.id).sort()
+
+    before(function() {
+        fs.rmSync(fdIns, { recursive: true, force: true })
+        fs.mkdirSync(fdIns, { recursive: true })
+        so = WServOrm(ds, WOrmInsertFail, `${fdIns}/db.json`, 'worm')
+    })
+
+    beforeEach(async function() {
+        injectInsert = false
+        injectOther = null
+        await so.woItems.tests.delAll({})
+        await so.woItems.tests.insert([{ id: 'x1' }, { id: 'x2' }, { id: 'x3' }])
+    })
+
+    after(async function() {
+        injectInsert = false
+        injectOther = null
+        await so.closeAll()
+        fs.rmSync(fdIns, { recursive: true, force: true })
+    })
+
+    it('F01 insert之ORM回報ok為0時reject而不回成功', async function() {
+        //規則4: 聚合結果ok為0視為失敗; 已寫入之筆無從回復(ORM違約, 第1筆已寫入、第0筆未寫入), 但呼叫端得知失敗
+        injectInsert = true
+        let err = await getReject(proc('insert', [{ id: 'n1' }, { id: 'n2' }]))
+        assert.strict.equal(err, 'failed to insert data')
+        assert.strict.deepEqual(await getIds(), ['n2', 'x1', 'x2', 'x3'])
+    })
+
+    it('F02 mix之add之ORM回報ok為0時reject且後續del不執行', async function() {
+        //規則4: add為首步, 聚合結果ok為0即立即reject, del步驟不執行(x3仍在庫內)
+        injectInsert = true
+        let err = await getReject(proc('mix', { add: [{ id: 'n1' }, { id: 'n2' }], del: [{ id: 'x3' }] }))
+        assert.strict.equal(err, 'failed to insert data')
+        assert.strict.deepEqual(await getIds(), ['n2', 'x1', 'x2', 'x3'])
+    })
+
+    it('F04 insert之ORM回報陣列形逐筆ok為0時reject而不回成功', async function() {
+        //規則4(orm-run04): 陣列形任一筆ok為0同聚合形處置; 其餘筆已寫入(n2)無從回復
+        injectInsert = 'array'
+        let err = await getReject(proc('insert', [{ id: 'n1' }, { id: 'n2' }]))
+        assert.strict.equal(err, 'failed to insert data')
+        assert.strict.deepEqual(await getIds(), ['n2', 'x1', 'x2', 'x3'])
+    })
+
+    it('F05 mix之add之ORM回報陣列形逐筆ok為0時reject且後續del不執行', async function() {
+        //規則4(orm-run04): add為首步, 立即reject, del步驟不執行(x3仍在庫內)
+        injectInsert = 'array'
+        let err = await getReject(proc('mix', { add: [{ id: 'n1' }, { id: 'n2' }], del: [{ id: 'x3' }] }))
+        assert.strict.equal(err, 'failed to insert data')
+        assert.strict.deepEqual(await getIds(), ['n2', 'x1', 'x2', 'x3'])
+    })
+
+    it('F06 delAll之ORM回報聚合物件ok為0時reject而不回成功', async function() {
+        //R-ORM-RESULT-01(orm-run05): ORM已執行刪除而回報ok為0(違約), 呼叫端得知失敗
+        injectOther = 'delAll'
+        let err = await getReject(proc('delAll', { id: 'x1' }))
+        assert.strict.equal(err, 'failed to delete data')
+        injectOther = null
+        assert.strict.deepEqual(await getIds(), ['x2', 'x3'])
+    })
+
+    it('F07 save與del之ORM回報聚合物件ok為0時reject而不回成功', async function() {
+        //R-ORM-RESULT-01(orm-run05): 契約為逐筆陣列, 聚合形(非契約形狀)無從逐筆列出, 固定字串reject
+        injectOther = 'save'
+        let err = await getReject(proc('save', [{ id: 'x1', isActive: 'n' }]))
+        assert.strict.equal(err, 'failed to save data')
+        injectOther = 'del'
+        err = await getReject(proc('del', [{ id: 'x2' }]))
+        assert.strict.equal(err, 'failed to delete data')
+    })
+
+    it('F08 mix之del回報聚合物件ok為0時立即reject且diff不執行', async function() {
+        //R-ORM-RESULT-01(orm-run05): del為第2步, 聚合形失敗即整批性, diff步驟不執行(x1之isActive仍為預設而未被改為n)
+        injectOther = 'del'
+        let err = await getReject(proc('mix', { del: [{ id: 'x3' }], diff: [{ id: 'x1', isActive: 'n' }] }))
+        assert.strict.equal(err, 'failed to delete data')
+        injectOther = null
+        let rs = await so.woItems.tests.select({ id: 'x1' })
+        assert.ok(rs.length === 1 && rs[0].isActive !== 'n', JSON.stringify(rs))
+    })
+
+    it('F09 契約內之ORM(delAll恆ok為1)行為不變', async function() {
+        //R-ORM-RESULT-01: 未違約時delAll、save、del照常resolve
+        let r = await proc('delAll', { id: 'x1' })
+        assert.strict.deepEqual(r, { n: 1, nDeleted: 1, ok: 1 })
+        let r2 = await proc('save', [{ id: 'x2', isActive: 'n' }])
+        assert.strict.deepEqual(r2, [{ id: 'x2' }])
+        let r3 = await proc('del', [{ id: 'x3' }])
+        assert.strict.deepEqual(r3, [{ n: 1, nDeleted: 1, ok: 1 }])
+    })
+
+    it('F03 契約內之ORM(insert恆ok為1)行為不變', async function() {
+        //規則4: 未違約時insert與mix照常resolve並寫入; 略過既有主鍵(n為0)亦照常
+        let r = await proc('insert', [{ id: 'n1' }, { id: 'x1' }])
+        assert.strict.deepEqual(r, [{ id: 'n1' }, { id: 'x1' }])
+        let r2 = await proc('mix', { add: [{ id: 'n2' }], del: [{ id: 'x3' }] })
+        assert.strict.deepEqual(r2, [{ id: 'n2' }, { id: 'x3' }])
+        assert.strict.deepEqual(await getIds(), ['n1', 'n2', 'x1', 'x2'])
+    })
+
+})

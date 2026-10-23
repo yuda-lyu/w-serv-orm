@@ -45,6 +45,8 @@ function mkErrBaseline(c) {
  *
  * procOrm之save、del與mix，於ORM回傳之逐筆結果有任一筆ok為0(單筆失敗)時reject，訊息列出失敗筆之主鍵，如'failed to save data: id[b]'(超過100字元者截斷顯示；無有效主鍵者以data[k]列其於輸入內之位置，k自0起；超過10筆者只列前10筆並附總筆數)，錯誤原文另由console.log輸出。
  * 單筆失敗不中斷整批，故reject時其餘筆數已寫入。
+ * 寫入類函數之回傳凡可表達失敗者一律檢查，失敗即reject或拋錯，不當成功(規則帳本R-ORM-RESULT-01)：save、del與mix之del、diff若ORM改回聚合物件而ok為0(非契約形狀，無從逐筆列出)亦視為失敗，以固定字串'failed to save data'、'failed to delete data'、'failed to update data'reject，mix之del、diff遇此視為整批性錯誤而立即reject，後續步驟不執行；delAll依契約回傳聚合物件且ok恆為1(錯誤皆整批reject)，ok為0(或回傳逐筆陣列而任一筆ok為0)以固定字串'failed to delete data'reject；讀取類select之回傳為數據列(列內欄位可能名為ok)，失敗只以reject表達，不檢查ok。
+ * insert(含mix之新增)依ORM契約回傳聚合物件且ok恆為1(錯誤皆整批reject)；ORM若resolve聚合物件而ok為0，或回傳逐筆陣列(非insert契約形狀)而任一筆ok為0(違約或他種後端)，亦視為失敗，以固定字串'failed to insert data'reject(錯誤原文另由console.log輸出)，已寫入之筆無從回復；mix之新增遇此視為整批性錯誤而立即reject，後續del、diff步驟不執行。回傳undefined、null、無ok鍵之物件、空陣列或逐筆皆ok非0之陣列者不檢查，維持舊行為；略過既有主鍵(n為0、ok為1)為正常結果。備份還原(recover)之逐表insert同此判準，失敗時於該表停止並以Error reject(訊息為'failed to recover data into table[表名]: '接ORM回傳原文，逐筆陣列則列失敗筆{k,id,err}，至多前10筆並附總筆數，另列先前已寫入之表)，之後之表不寫入，先前之表與該表已被ORM寫入之筆無從回復。
  * mix之各步驟遇單筆失敗不中斷後續步驟，待全部步驟完成後一併reject；遇整批性錯誤則立即reject，後續步驟不執行。mix於resolve時回傳各步驟所處理之列之id(依add、del、diff之序串接，del之列不分是否命中)。
  *
  * insert、save與mix之新增、修改，數據未帶有效主鍵(未給、null、空字串，或非字串非數字之值，含NaN與±Infinity)者，若資料表之主鍵欄為id且為字串型(或型別未知；型別如STRING(36)者以括號前之字判定)，由本套件產生主鍵(同各ORM之genIDSeq)並於resolve時回傳；單一空物件與只含一個空物件之陣列不補(ORM視為無效輸入而不寫入)，多筆批次中之空物件列則補。

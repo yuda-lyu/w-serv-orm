@@ -12,7 +12,7 @@
 
 | 類 | 檔 | 內容(規則編號) |
 |---|---|---|
-| 錯誤、訊息與輸入形狀 | `rulebook_error-input.md` | R-ERR-01、R-MSG-01、R-PERITEM-01、R-INPUT-01、R-MIX-01 |
+| 錯誤、訊息與輸入形狀 | `rulebook_error-input.md` | R-ERR-01、R-MSG-01、R-PERITEM-01、R-ORM-RESULT-01(ORM 回傳失敗之全站點盤點,2026-10-23 orm-run05 新增)、R-INPUT-01、R-MIX-01 |
 | 主鍵、條件(find)與 XSS | `rulebook_id-find.md` | R-ID-01、R-ID-02、R-WL-01、R-XSS-01 |
 | 使用端物件之迭代與複製 | `rulebook_obj.md` | R-OBJ-01 |
 | 擴充函數、授權、實例、備份還原與相容 | `rulebook_runtime.md` | R-HOOK-01、R-AUTH-01、R-INST-01、R-DB-01、R-COMPAT-01 |

@@ -61,15 +61,65 @@
   1. save、del 之 ORM 回傳為逐筆陣列(規格 T2);任一筆 ok 為 0 即 reject,並列出失敗筆(格式見 R-MSG-01 規則 3).查無(ok:1、n:0)不是失敗.
   2. 單筆失敗不中斷整批,reject 時其餘筆已寫入.
   3. mix 依 add、del、diff 之序執行.逐筆失敗不中斷後續步驟,全部完成後一併 reject;整批性錯誤立即 reject,後續步驟不執行.
-  4. insert 回聚合物件,其錯誤皆整批 reject,不做逐筆檢查.ORM 回傳非陣列(未依規格)時不檢查.
+  4. insert 回聚合物件,其錯誤皆整批 reject,不做逐筆檢查.ORM 回傳非陣列(未依規格)時不檢查.**(2026-10-23 orm-run03 增,run04 擴)** insert 回報失敗(違約之 ORM 或他種後端;w-orm-lmdb 契約為聚合 ok 恆 1)即固定字串 reject `failed to insert data`(原文只進 log),不回成功.判準為單一謂詞 `src/isOrmFail.mjs`(run04 時名為 `isInsertFail`,run05 起泛用於各寫入類函數,見 R-ORM-RESULT-01): ①聚合物件(非 null、非陣列之物件)`ok === 0`(run03);②回傳為逐筆陣列(非 insert 契約形狀)而任一筆 `ok === 0`(同 getItemsFail 之判讀,run04);其餘(undefined、null、無 ok 鍵之物件、空陣列、逐筆皆 ok 非 0 之陣列、ok 為 1 含 n 為 0 之略過)維持不檢查.兩形狀處置相同(固定字串,不列失敗筆;失敗筆只進 log).mix 之 add 步取 `wo.insert(add)` 之回傳同判,視為整批性錯誤而立即 reject,del、diff 步驟不執行(陣列形亦然,取捨: insert 之失敗不論形狀皆視為 insert 失敗,不併入待全部步驟完成才 reject 之逐筆失敗).已寫入之筆無從回復.契約內之 ORM 行為零改變.備份還原 recover 同判準,見 R-DB-01 規則 3.
   5. 失敗訊息以呼叫端原輸入列出(inputOrig `:570`、diffOrig `:843`);本套件補出之主鍵只寫於複本,reject 時呼叫端未曾取得.del 與 mix 之 del 以 R-ID-02 轉型後之列判讀與列出(數字之字串形式與原數字之列出文字相同).
   6. 逐筆失敗而 reject 時不執行後處理.
-- 盤點指令: Grep `src/` 搜 `getItemsFail\(`.
+- 盤點指令: Grep `src/` 搜 `getItemsFail\(|isOrmFail\(`.
 - 站點全集與判準(2026-10-13):
   - `src/getMapOrm.mjs:632-640`(save)、`:668-675`(del)、`:825-830`(mix 之 del)、`:867-872`(mix 之 diff)、`src/genTestData.mjs:52`(funTest 之寫入): 已套(2026-10-17 run02 重取).
-  - insert 與 mix 之 add: 刻意不套(規則 4).
-- 測試: `test/unit-mapOrm.test.mjs` U01-U22;`test/api-procOrm.test.mjs` A01-A04;`test/unit-WServOrm.test.mjs` H01、P06.
-- 變更紀錄: 1.1.7(2026-10-11)由靜默 resolve 改為 reject;1.1.8 改用 w-data-collector 之 getItemsFail.
+  - insert 與 mix 之 add: 不做逐筆列舉(規則 4),改以 `isOrmFail` 判回報失敗(聚合 `ok === 0`〔2026-10-23 orm-run03〕、逐筆陣列任一筆 `ok === 0`〔run04〕): `src/isOrmFail.mjs` 之定義處與兩個呼叫站(execMapOrm 之 insert 分支、mix 之 add 步): 已套.
+  - `src/getDbBackupAndRecover.mjs` recover 之 `woItems[v.name].insert(v.data)` 不經 procOrm,同判準(run04): 已套,見 R-DB-01 規則 3.
+- 測試: `test/unit-mapOrm.test.mjs` U01-U22(含 orm-run03 新增 U17b、U17c、U19b、U19c、U19d,run04 新增 U17d、U19e,並將 U17c、U19c 的「陣列含 ok 為 0 仍 resolve」改為「陣列逐筆皆無 ok 為 0」);`test/api-procOrm.test.mjs` A01-A04、F01-F05(真 w-orm-lowdb 包一層注入 insert ok:0,F04、F05 為陣列形);`test/unit-isOrmFail.test.mjs` V01-V03(判準真值表);`test/unit-WServOrm.test.mjs` H01、P06.
+- 變更紀錄: 1.1.7(2026-10-11)由靜默 resolve 改為 reject;1.1.8 改用 w-data-collector 之 getItemsFail;1.1.17 之後(2026-10-23 orm-run03,未發布): insert 與 mix 之 add 增判聚合結果 ok 為 0(來源: w-web-api 主責 agent 之建議書 R18,實測屬實);同日 orm-run04(未發布): 判準抽為共用謂詞,擴及逐筆陣列形,並供備份還原 recover 使用(主控裁示原則 1、4,皆修);同日 orm-run05: 謂詞更名 `isOrmFail`(檔 `src/isOrmFail.mjs`、測試 `test/unit-isOrmFail.test.mjs`),擴及 save、del、delAll 與 mix 之 del、diff、genTestData,見 R-ORM-RESULT-01.
+
+## R-ORM-RESULT-01 ORM 寫入類函數之回傳凡可表達失敗者一律檢查,失敗即 reject 或拋錯,不得當成功
+
+- 狀態: 已套(2026-10-23 orm-run05,未發布;主控裁示:原則 1 預設拒絕、原則 4 所有入口一致,一次盤點全部站點).
+- 單一擁有者: `src/isOrmFail.mjs`(判準);各站點之處置見下表.
+- 契約依據: `w-orm系列套件統一規格.md`(T2 回傳型別、T4 `ok` 與錯誤處置、各函數規格)與 `w-orm-mdb`、`w-orm-reladb` 之 `createStorage` JSDoc、`w-orm-lmdb`、`w-orm-level` 之 `close`:
+  - `select(find)` → 數據列陣列(列內欄位可能名為 `ok`),失敗一律 reject.
+  - `insert(data)` → 聚合 `{ n, nInserted, ok }`,`ok` 恆為 1,錯誤皆整批 reject(`option.returnList` 開啟時為逐筆陣列,本套件不使用).
+  - `save`、`del` → 與輸入等長之逐筆陣列,單筆失敗該筆 `ok:0` 並附 `err`,整批仍 resolve;整批性錯誤 reject.
+  - `delAll(find)` → 聚合 `{ n, nDeleted, ok }`,`ok` 恆為 1,錯誤皆整批 reject.
+  - `createStorage()` → 狀態字串(mdb: `'existed'`/`'created'`;reladb: `'created'`),失敗 reject(reladb 以 `si.err` reject).
+  - `close()` → resolve `undefined`(level)或內部 `client.close()` 之結果(lmdb),失敗 reject.
+- 規則:
+  1. **可表達失敗者**=契約回傳含 `ok` 欄位之寫入類函數(`insert`、`save`、`del`、`delAll`),一律以 `isOrmFail(r)` 檢查:逐筆陣列任一筆 `ok === 0`(同 `getItemsFail`),或聚合物件 `ok === 0`;**不論契約形狀為何皆判**(契約為陣列者回聚合形、契約為聚合者回陣列形,都是違約,仍視為失敗).命中即 reject(procOrm)或拋 Error(工具路徑),不得當成功.
+  2. 其餘回傳(undefined、null、無 `ok` 鍵之物件、空陣列、元素皆 `ok` 非 0 或非物件之陣列、`ok:1` 含略過/未命中之 `n:0`)維持不檢查,對契約內之 ORM 行為零改變.
+  3. 訊息: 契約形狀之逐筆失敗維持列失敗筆主鍵(R-PERITEM-01、R-MSG-01);違約形狀(聚合形於 save、del;任何形狀於 insert、delAll)無從逐筆列出,固定字串 `failed to insert data`、`failed to save data`、`failed to delete data`、`failed to update data`(mix 之 diff),ORM 回傳原文只進 console.log.工具路徑(recover、genTestData)為 Error,訊息含 ORM 回傳原文(R-DB-01 規則 3).
+  4. **mix**: add 之違約(聚合或陣列)、del 與 diff 之聚合形違約皆視為整批性錯誤,立即 reject,後續步驟不執行(R-PERITEM-01 規則 3);契約形狀之逐筆失敗仍待全部步驟完成後一併 reject.
+  5. **讀取類不檢查**: `select` 之回傳為數據列,列內欄位可能名為 `ok`,以 `isOrmFail` 判讀會把正常數據誤判為失敗;失敗只以 reject 表達.`createStorage`、`close` 之回傳為狀態值,失敗以 reject 表達,無 `ok` 可檢.
+  6. **新增 ORM 呼叫站點須先歸類**: `test/unit-ormsites.test.mjs`(O01)逐行去除註解後盤點 `src/*.mjs` 內 `.方法(` 之呼叫次數,與下表一致;不一致即失敗,須回本表判定「已檢查」或「不適用」後再更新測試之預期表.不得以括號記法或動態方法名呼叫 ORM(O02),ORM 建構僅 `getWoItems` 一處(O03).
+- 盤點指令(可重跑): Grep 工具搜 `\.(select|selectByPk|selectAll|insert|insertBulk|save|del|delAll|selectGfs|selectByPkGfs|insertGfs|delGfs|delAllGfs|createStorage|close|backup|recover|funTest|funTestAndSave)\(|new WOrm\(`,路徑 `src/`、glob `*.mjs`,逐行排除註解(以 `//` 或 `*` 起首);另搜括號記法 `\[['"\`](同上方法名)['"\`]\]` 應為 0 筆.2026-10-23 結果: **19 站**(`src/` 內,不含註解行 `getDbBackupAndRecover.mjs:133`),**未歸類 0**;另有外部站點 2(w-data-collector,見表末).
+- 站點全集與判準(2026-10-23,行號依該日工作樹;行號會位移,以 O01 之計次為準):
+
+| # | 檔:行 | 呼叫 | 契約回傳 | 現行是否檢查失敗 | 處置 |
+|---|---|---|---|---|---|
+| 1 | `getMapOrm.mjs:499` | `wo.select`(hasMissingRow,mustExist 之存在檢查) | 數據列陣列 | 非陣列視為空(判不存在,fail-closed);失敗 reject 由呼叫端 catch 轉固定字串 | 不適用(讀取類,規則 5) |
+| 2 | `getMapOrm.mjs:1201` | `wo.select`(select 模式) | 數據列陣列 | 失敗 reject → `failed to select data` | 不適用(讀取類,規則 5) |
+| 3 | `getMapOrm.mjs:1283` | `wo.insert`(insert 模式) | 聚合 ok:1 | 已檢查(`isOrmFail`,run03/04) | 已套: `failed to insert data` |
+| 4 | `getMapOrm.mjs:1291` | `wo.save`(save 模式,含 mustExist 之 `autoInsert:false` 呼叫形式) | 逐筆陣列 | 逐筆已檢查(1.1.7 起);聚合形違約原未檢查 | **本輪補**: `failed to save data`;mustExist 下優先於 `rowNotFound` |
+| 5 | `getMapOrm.mjs:1382` | `wo.del`(del 模式) | 逐筆陣列 | 逐筆已檢查;聚合形違約原未檢查 | **本輪補**: `failed to delete data` |
+| 6 | `getMapOrm.mjs:1419` | `wo.delAll` | 聚合 ok:1 | **原完全未檢查**(只有 catch) | **本輪補**: `failed to delete data` |
+| 7 | `getMapOrm.mjs:1565` | `wo.insert`(mix 之 add) | 聚合 ok:1 | 已檢查(run03/04) | 已套: 立即 reject |
+| 8 | `getMapOrm.mjs:1593` | `wo.del`(mix 之 del) | 逐筆陣列 | 逐筆已檢查;聚合形違約原未檢查 | **本輪補**: `failed to delete data`,立即 reject |
+| 9 | `getMapOrm.mjs:1633` | `wo.save`(mix 之 diff) | 逐筆陣列 | 逐筆已檢查;聚合形違約原未檢查 | **本輪補**: `failed to update data`,立即 reject |
+| 10 | `getDbBackupAndRecover.mjs:61` | `v.select()`(backup) | 數據列陣列 | 失敗 reject 原樣轉出 | 不適用(讀取類,規則 5) |
+| 11 | `getDbBackupAndRecover.mjs:131` | `createStorage()`(recover,needCreateStorage) | 狀態字串,失敗 reject | 失敗 reject 原樣轉出 | 不適用(規則 5;run04 觀察「未檢查」經查契約不成立) |
+| 12 | `getDbBackupAndRecover.mjs:136` | `insert(v.data)`(recover) | 聚合 ok:1 | 已檢查(run04) | 已套: Error,於該表停止 |
+| 13 | `genTestData.mjs:33` | `v.funTestAndSave(woItems)` | 資料列(w-data-collector 之 build 產生;其內部 ORM 呼叫見外部站點) | — | 不適用(回傳非 ORM 結果) |
+| 14 | `genTestData.mjs:42` | `v.funTest(woItems)` | 資料列(純資料產生,不呼叫 ORM) | — | 不適用(無 ORM 呼叫) |
+| 15 | `genTestData.mjs:50` | `woItems[k].save(rs)`(funTest 模式) | 逐筆陣列 | 逐筆已檢查;聚合形違約原未檢查 | **本輪補**: Error,內文列 ORM 回傳原文 |
+| 16 | `WServOrm.mjs:163` | `wo.close()`(closeAll) | resolve 空值,失敗 reject | 失敗 reject 原樣轉出 | 不適用(規則 5) |
+| 17 | `getDb.mjs:79` | `br.backup(woItems)` | 本套件內函數(委派) | — | 不適用(無 ORM 回傳;其 ORM 站點為 #10) |
+| 18 | `getDb.mjs:146` | `br.recover(...)`(委派) | 本套件內函數(委派) | — | 不適用(無 ORM 回傳;其 ORM 站點為 #11、#12) |
+| 19 | `getWoItems.mjs:42` | `new WOrm(useOpt)`(建構) | 實例;失敗以拋錯表達 | 拋錯原樣轉出 | 不適用(建構無回傳可檢查,O03) |
+| E1 | `node_modules/w-data-collector/src/build.mjs:96`(外部,不屬本套件) | `wo[keyTable].createStorage()`(funTestAndSave) | 狀態字串 | — | 不適用(規則 5) |
+| E2 | 同上 `:100` | `wo[keyTable].save(rs)`(funTestAndSave) | 逐筆陣列 | 逐筆已檢查(getItemsFail);聚合形違約未檢查 | **外部缺口,本套件不得改**: 待通報 w-data-collector(主控裁示),影響僅 genTestData 之 funTestAndSave 模式 |
+
+- 統計: 19 站 = 已檢查 9(#3、#4、#5、#6、#7、#8、#9、#12、#15;其中本輪補強 #4、#5、#6、#8、#9、#15 共 6 站)+ 不適用 10(#1、#2、#10、#11、#13、#14、#16、#17、#18、#19);未歸類 0.
+- 測試: `test/unit-mapOrm.test.mjs` U03b/c、U10c、U12b、U14b/c/d、U21b/c、U24/b/c/d;`test/api-procOrm.test.mjs` F06-F09(真 w-orm-lowdb 包一層注入);`test/unit-isOrmFail.test.mjs` V01-V03;`test/unit-ormsites.test.mjs` O01-O03;`test/unit-getDb.test.mjs` B05b-B05f(recover).
+- 變更紀錄: 2026-10-23 orm-run05 新增(主控裁示:run04 觀察 delAll、createStorage 未檢查,一次盤點全部站點).
 
 ## R-INPUT-01 寫入、select 與 delAll 之輸入形狀
 

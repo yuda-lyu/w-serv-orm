@@ -70,14 +70,16 @@
      - 檔案須存在,woItems 須為非空物件.
      - 內容須為非空陣列,各筆 name 為字串且為 woItems 之**自有屬性**(Object.prototype.hasOwnProperty;原以 wsemi haskey 即 `in`,`constructor`、`toString` 等原型鏈名稱通過驗證,前面之表寫入後才以 TypeError 失敗而部分還原,外審 opus 二輪 F9,2026-10-17 修);於任何寫入之前驗證.
      - 以 insert 還原(主鍵已存在即略過),故資料表須先清空.
+     - **insert 回報失敗不得當成功**(2026-10-23 orm-run04,主控裁示原則 1、4): 各表 insert 之回傳以 `src/isOrmFail.mjs`(原名 isInsertFail;同 R-ORM-RESULT-01: 聚合 `ok === 0` 或逐筆陣列任一筆 `ok === 0`)判讀,失敗即於該表停止並 `throw new Error(...)`(R-ERR-01 規則 2: recover 由本套件產生之錯誤為 Error),之後之表不寫入.訊息 `failed to recover data into table[<表名>]: <ORM 回傳原文,逐筆陣列則為失敗筆 [{k,id,err}] 至多前 10 筆,超過附 ", ... (N in total)">`,另接 `; tables already written: <先前已完成 insert 之表,以 ", " 串接>`(無則省略).伺服器端工具,訊息含 ORM 原文(同 genTestData 之 `failed to write test data into table[k]`).ORM 自身 reject 之錯誤仍原樣轉出(不變).
+     - 取捨(寫入報告): 維持「逐表寫入,中途失敗則先前之表已寫入」語意,不改為整體回復(recover 前提為資料庫先清空,無從安全回復;`delAll` 回復有誤刪風險)亦不改為「失敗後繼續寫其餘表再統一報告」(會擴大不一致);改善僅在**明確回報**(列出失敗表與先前已寫入之表),營運者據以清空已寫入之表後重跑.該失敗表已被 ORM 寫入之筆(陣列形之其餘筆)亦無從回復.
   4. getDb.recover 之 bRela 須提供 opt.ds 與 opt.genModelsByTabs.
   5. 低階 recover 之參數為 `(fp, woItems, genModels, needCreateStorage)`,getDb.recover 為 `(woItems, fp, opt)`,順序不同(既有,不改).
 - 已知限制:
   - 同一秒內兩次 backup,檔名相同而覆寫.
   - 輸出目錄固定為 cwd.
-  - 逐表寫入中途失敗時,先前之表已寫入.
+  - 逐表寫入中途失敗時(ORM reject 或 insert 回報 ok 為 0),先前之表已寫入,之後之表不寫入;失敗訊息列出先前已寫入之表(orm-run04).
   - 觀察(2026-10-17 外審 sol 實跑,主控裁示不修): `src/getDbBackupAndRecover.mjs:99` 之 `size(v.data)` 對格式外之物件型 `data`(如 `data:{id:'a',length:0}`)為 `length` 之值(0)而不呼叫 insert,靜默略過該表;備份檔由 backup 產生,`data` 恆為 select 之列陣列,屬營運者備份檔路徑、格式外輸入.
-- 測試: `test/unit-getDb.test.mjs` B01-B12、B04b(備份之 name 為原型鏈名稱即於寫入前 reject).
+- 測試: `test/unit-getDb.test.mjs` B01-B12、B04b(備份之 name 為原型鏈名稱即於寫入前 reject)、B05b-B05f(orm-run04: insert 回報失敗之聚合形、陣列形、首表失敗與 10 筆上限、無失敗形狀照舊、低階 recover);`test/unit-isOrmFail.test.mjs` V01-V03.
 - 變更紀錄: 1.1.8(原 getDb 吞錯、bRela 必失敗、壞檔或空陣列假成功).
 
 ## R-COMPAT-01 已發布之 src 路徑視為公開介面;使用端皆為自有套件,不留相容檔

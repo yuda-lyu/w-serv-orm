@@ -146,6 +146,80 @@ describe('mapOrm逐筆失敗', function() {
         assert.strict.deepEqual(r, { n: 1, nDeleted: 1, ok: 1 })
     })
 
+    it('U03b save之ORM回傳聚合物件ok為0(非契約形狀)', async function() {
+        //R-ORM-RESULT-01(orm-run05): 契約為逐筆陣列; 回傳聚合物件而ok為0者無從逐筆列出, 仍視為失敗, 固定字串reject(陣列與單一物件輸入皆是)
+        plan.save = () => ({ n: 2, nInserted: 0, nModified: 0, ok: 0, err: 'E-agg' })
+        let err = await getReject(proc('save', [{ id: 's1' }, { id: 's2' }]))
+        assert.strict.equal(err, 'failed to save data')
+        err = await getReject(proc('save', { id: 's3' }))
+        assert.strict.equal(err, 'failed to save data')
+    })
+
+    it('U03c save之ORM回傳非陣列且無失敗者照舊', async function() {
+        //R-ORM-RESULT-01: undefined、null、無ok鍵之物件、ok為1之聚合物件不判失敗(維持舊行為, 同U07)
+        for (let rSave of [undefined, null, {}, { n: 1 }, { n: 1, ok: 1 }]) {
+            plan.save = () => rSave
+            let r = await proc('save', [{ id: 's1' }])
+            assert.strict.deepEqual(r, [{ id: 's1' }], JSON.stringify(rSave))
+        }
+    })
+
+    it('U10c del之ORM回傳聚合物件ok為0(非契約形狀)', async function() {
+        //R-ORM-RESULT-01(orm-run05): 同U03b; 陣列與單一物件輸入皆是
+        plan.del = () => ({ n: 1, nDeleted: 0, ok: 0, err: 'E-agg' })
+        let err = await getReject(proc('del', [{ id: 'd1' }, { id: 'd2' }]))
+        assert.strict.equal(err, 'failed to delete data')
+        err = await getReject(proc('del', { id: 'd3' }))
+        assert.strict.equal(err, 'failed to delete data')
+    })
+
+    it('U12b del之ORM回傳非陣列且無失敗者照舊回傳ORM原值', async function() {
+        //R-ORM-RESULT-01: undefined、null、無ok鍵之物件、ok為1之聚合物件不判失敗(同U12)
+        for (let rDel of [undefined, null, {}, { n: 1 }, { n: 1, nDeleted: 1, ok: 1 }]) {
+            plan.del = () => rDel
+            let r = await proc('del', [{ id: 'd1' }])
+            assert.strict.deepEqual(r, rDel, JSON.stringify(rDel))
+        }
+    })
+
+    it('U24 delAll之ORM回報失敗(聚合物件ok為0, 或陣列形任一筆ok為0)', async function() {
+        //R-ORM-RESULT-01(orm-run05): 契約為聚合物件ok恆為1(錯誤皆整批reject); ok為0者視為失敗, 固定字串reject, 不回成功; 無條件與有條件皆是
+        for (let rAll of [{ n: 0, nDeleted: 0, ok: 0, err: 'E-agg' }, [{ n: 0, nDeleted: 0, ok: 1 }, { ok: 0 }]]) {
+            plan.delAll = () => rAll
+            let err = await getReject(proc('delAll', {}))
+            assert.strict.equal(err, 'failed to delete data', JSON.stringify(rAll))
+            err = await getReject(proc('delAll', { id: 'd1' }))
+            assert.strict.equal(err, 'failed to delete data', JSON.stringify(rAll))
+        }
+    })
+
+    it('U24b delAll之ORM回傳無失敗者照舊回傳ORM原值', async function() {
+        //R-ORM-RESULT-01: 條件無命中(n為0、ok為1)為正常結果; undefined、null、無ok鍵之物件、空陣列不判失敗
+        for (let rAll of [{ n: 0, nDeleted: 0, ok: 1 }, { n: 3, nDeleted: 3, ok: 1 }, undefined, null, {}, [], [{ ok: 1 }]]) {
+            plan.delAll = () => rAll
+            let r = await proc('delAll', { id: 'd1' })
+            assert.strict.deepEqual(r, rAll, JSON.stringify(rAll))
+        }
+    })
+
+    it('U24c delAll之ORM整批reject', async function() {
+        //R-PERITEM-01 規則1之既有處置不變: ORM reject轉固定字串
+        plan.delAll = () => Promise.reject(new Error('E-batch'))
+        let err = await getReject(proc('delAll', {}))
+        assert.strict.equal(err, 'failed to delete data')
+    })
+
+    it('U24d mustExist之save與del遇聚合物件ok為0時以一般失敗字串reject, 不誤報rowNotFound', async function() {
+        //R-ORM-RESULT-01: ok為0優先於mustExist之事後偵測(hasNoHit只認ok非0者)
+        plan.select = () => [{ id: 's1' }]
+        plan.save = () => ({ n: 0, nInserted: 0, nModified: 0, ok: 0, err: 'E-agg' })
+        plan.del = () => ({ n: 0, nDeleted: 0, ok: 0, err: 'E-agg' })
+        let err = await getReject(so.procOrm('u1', 'tests', 'save', [{ id: 's1' }], { mustExist: true }))
+        assert.strict.equal(err, 'failed to save data')
+        err = await getReject(so.procOrm('u1', 'tests', 'del', [{ id: 's1' }], { mustExist: true }))
+        assert.strict.equal(err, 'failed to delete data')
+    })
+
     it('U13 mix全部成功', async function() {
         //R04: mix依add、del、diff順序執行, 回傳累積之id
         plan.insert = (data) => ({ n: data.length, nInserted: data.length, ok: 1 })
@@ -164,6 +238,37 @@ describe('mapOrm逐筆失敗', function() {
         let err = await getReject(proc('mix', { add: [{ id: 'a1' }], del: [{ id: 'd1' }, { id: 'd2' }], diff: [{ id: 'f1' }] }))
         assert.strict.equal(err, 'failed to delete data: id[d2]; failed to update data: id[f1]')
         assert.strict.deepEqual(calls.map((v) => v.fn), ['insert', 'del', 'save'])
+    })
+
+    it('U14b mix之del回傳聚合物件ok為0(非契約形狀)', async function() {
+        //R-ORM-RESULT-01(orm-run05): 無從逐筆列出, 視為該步驟整批性失敗, 固定字串立即reject, diff步驟不執行(同add; 先前之逐筆失敗僅由log輸出, 同U18)
+        plan.insert = (data) => ({ n: data.length, nInserted: data.length, ok: 1 })
+        plan.del = () => ({ n: 1, nDeleted: 0, ok: 0, err: 'E-agg' })
+        plan.save = (data) => data.map(() => okSave)
+        let err = await getReject(proc('mix', { add: [{ id: 'a1' }], del: [{ id: 'd1' }], diff: [{ id: 'f1' }] }))
+        assert.strict.equal(err, 'failed to delete data')
+        assert.strict.deepEqual(calls.map((v) => v.fn), ['insert', 'del'])
+    })
+
+    it('U14c mix之diff回傳聚合物件ok為0(非契約形狀)', async function() {
+        //R-ORM-RESULT-01(orm-run05): 同U14b; 先前del之逐筆失敗不影響以diff之固定字串reject
+        plan.del = () => [{ n: 0, nDeleted: 0, ok: 0, err: 'E-del' }]
+        plan.save = () => ({ n: 1, nInserted: 0, nModified: 0, ok: 0, err: 'E-agg' })
+        let err = await getReject(proc('mix', { del: [{ id: 'd1' }], diff: [{ id: 'f1' }] }))
+        assert.strict.equal(err, 'failed to update data')
+        assert.strict.deepEqual(calls.map((v) => v.fn), ['del', 'save'])
+    })
+
+    it('U14d mix之del與diff回傳非陣列且無失敗者照舊', async function() {
+        //R-ORM-RESULT-01: undefined、null、無ok鍵之物件、ok為1之聚合物件不判失敗
+        for (let rStep of [undefined, null, {}, { n: 1 }, { n: 1, ok: 1 }]) {
+            calls = []
+            plan.del = () => rStep
+            plan.save = () => rStep
+            let r = await proc('mix', { del: [{ id: 'd1' }], diff: [{ id: 'f1' }] })
+            assert.strict.deepEqual(r, [{ id: 'd1' }, { id: 'f1' }], JSON.stringify(rStep))
+            assert.strict.deepEqual(calls.map((v) => v.fn), ['del', 'save'], JSON.stringify(rStep))
+        }
     })
 
     it('U15 mix僅del有ok為0', async function() {
@@ -201,11 +306,95 @@ describe('mapOrm逐筆失敗', function() {
         assert.strict.equal(err, 'failed to update data')
     })
 
+    it('U17b mix之add聚合結果ok為0', async function() {
+        //R-PERITEM-01 規則4(orm-run03): insert契約上ok恆為1, 聚合結果ok為0(ORM違約)視為整批性失敗, 立即reject, 後續步驟不執行
+        plan.insert = (data) => ({ n: data.length, nInserted: 0, ok: 0, err: 'E-ins' })
+        plan.del = (data) => data.map(() => okDel)
+        plan.save = (data) => data.map(() => okSave)
+        let err = await getReject(proc('mix', { add: [{ id: 'a1' }], del: [{ id: 'd1' }], diff: [{ id: 'f1' }] }))
+        assert.strict.equal(err, 'failed to insert data')
+        assert.strict.deepEqual(calls.map((v) => v.fn), ['insert'])
+    })
+
+    it('U17c mix之add略過既有主鍵或ORM回傳無失敗者照舊', async function() {
+        //R-PERITEM-01 規則4: 略過(n為0、ok為1)屬正常結果; 回傳undefined、null、無ok鍵之物件、空陣列、元素皆ok非0或非物件之陣列不判失敗
+        for (let rIns of [{ n: 0, nInserted: 0, ok: 1 }, undefined, null, [], [{ n: 1, nInserted: 1, ok: 1 }, { n: 0, nInserted: 0, ok: 1 }], [null, 1, 'x', {}], {}, { n: 1 }]) {
+            calls = []
+            plan.insert = () => rIns
+            plan.del = (data) => data.map(() => okDel)
+            let r = await proc('mix', { add: [{ id: 'a1' }], del: [{ id: 'd1' }] })
+            assert.strict.deepEqual(r, [{ id: 'a1' }, { id: 'd1' }], JSON.stringify(rIns))
+            assert.strict.deepEqual(calls.map((v) => v.fn), ['insert', 'del'], JSON.stringify(rIns))
+        }
+    })
+
+    it('U17d mix之add陣列形逐筆ok為0', async function() {
+        //R-PERITEM-01 規則4(orm-run04): insert回傳陣列形者(非契約形狀)亦逐筆判讀, 任一筆ok為0即同聚合形處置: 固定字串立即reject, 後續步驟不執行
+        for (let rIns of [[{ n: 1, nInserted: 0, ok: 0, err: 'E-ins' }], [{ n: 1, nInserted: 1, ok: 1 }, { n: 1, nInserted: 0, ok: 0 }], [{ ok: 1 }, null, { ok: 0 }]]) {
+            calls = []
+            plan.insert = () => rIns
+            plan.del = (data) => data.map(() => okDel)
+            plan.save = (data) => data.map(() => okSave)
+            let err = await getReject(proc('mix', { add: [{ id: 'a1' }, { id: 'a2' }], del: [{ id: 'd1' }], diff: [{ id: 'f1' }] }))
+            assert.strict.equal(err, 'failed to insert data', JSON.stringify(rIns))
+            assert.strict.deepEqual(calls.map((v) => v.fn), ['insert'], JSON.stringify(rIns))
+        }
+    })
+
     it('U19 insert成功', async function() {
         //R04: insert回傳聚合物件而非逐筆陣列, 照舊回傳id
         plan.insert = (data) => ({ n: data.length, nInserted: data.length, ok: 1 })
         let r = await proc('insert', [{ id: 'i1' }])
         assert.strict.deepEqual(r, [{ id: 'i1' }])
+    })
+
+    it('U19b insert聚合結果ok為0', async function() {
+        //R-PERITEM-01 規則4(orm-run03): 陣列與單一物件輸入皆須檢出, 固定字串reject而不回成功
+        plan.insert = (data) => ({ n: data.length, nInserted: 0, ok: 0, err: 'E-ins' })
+        let err = await getReject(proc('insert', [{ id: 'i1' }, { id: 'i2' }]))
+        assert.strict.equal(err, 'failed to insert data')
+        err = await getReject(proc('insert', { id: 'i3' }))
+        assert.strict.equal(err, 'failed to insert data')
+        assert.strict.deepEqual(calls.map((v) => v.fn), ['insert', 'insert'])
+    })
+
+    it('U19c insert略過既有主鍵或ORM回傳無失敗者照舊', async function() {
+        //R-PERITEM-01 規則4: 略過(n為0、ok為1)屬正常結果, 回傳id含被略過者; 回傳undefined、null、無ok鍵之物件、空陣列、元素皆ok非0或非物件之陣列不判失敗
+        for (let rIns of [{ n: 0, nInserted: 0, ok: 1 }, undefined, null, [], [{ n: 1, nInserted: 1, ok: 1 }, { n: 0, nInserted: 0, ok: 1 }], [null, 1, 'x', {}], {}, { n: 1 }]) {
+            plan.insert = () => rIns
+            let r = await proc('insert', [{ id: 'i1' }])
+            assert.strict.deepEqual(r, [{ id: 'i1' }], JSON.stringify(rIns))
+        }
+    })
+
+    it('U19e insert陣列形逐筆ok為0', async function() {
+        //R-PERITEM-01 規則4(orm-run04): 陣列形(非契約形狀)任一筆ok為0即同聚合形處置, 固定字串reject; 陣列與單一物件輸入皆是; 其餘筆是否寫入由ORM決定, 已寫入者無從回復
+        for (let rIns of [[{ n: 1, nInserted: 0, ok: 0, err: 'E-ins' }], [{ n: 1, nInserted: 1, ok: 1 }, { n: 1, nInserted: 0, ok: 0 }], [null, { ok: 0 }]]) {
+            plan.insert = () => rIns
+            let err = await getReject(proc('insert', [{ id: 'i1' }, { id: 'i2' }]))
+            assert.strict.equal(err, 'failed to insert data', JSON.stringify(rIns))
+            err = await getReject(proc('insert', { id: 'i3' }))
+            assert.strict.equal(err, 'failed to insert data', JSON.stringify(rIns))
+        }
+    })
+
+    it('U19d insert聚合結果ok為0時錯誤原文只進log而不進reject訊息', async function() {
+        //R06: 前端訊息為固定字串, 錯誤原文由console.log輸出
+        plan.insert = (data) => ({ n: data.length, nInserted: 0, ok: 0, err: 'E-secret-detail' })
+        let logs = []
+        let logOrig = console.log
+        console.log = (...args) => {
+            logs.push(args)
+        }
+        let err
+        try {
+            err = await getReject(proc('insert', [{ id: 'i1' }]))
+        }
+        finally {
+            console.log = logOrig
+        }
+        assert.strict.equal(err, 'failed to insert data')
+        assert.ok(JSON.stringify(logs).includes('E-secret-detail'))
     })
 
     it('U22 錯誤原文寫入log而不進reject訊息', async function() {
@@ -346,6 +535,30 @@ describe('genTestData逐筆失敗', function() {
         assert.ok(String(err).includes('tests'))
         assert.ok(String(err).includes('E-gen'))
         assert.ok(String(err).includes('g2'))
+    })
+
+    it('U21b funTest之save回傳聚合物件ok為0(非契約形狀)', async function() {
+        //R-ORM-RESULT-01(orm-run05): 無從逐筆列出, 仍視為失敗, 同U21之Error與訊息前綴, 內文列ORM回傳原文
+        let woItems = {
+            tests: {
+                save: async () => ({ n: 2, nInserted: 0, nModified: 0, ok: 0, err: 'E-gen' }),
+            },
+        }
+        let err = await getReject(genTestData(dsGen, woItems, { mode: 'funTest', bLog: false }))
+        assert.ok(err instanceof Error)
+        assert.strict.equal(err.message, 'failed to write test data into table[tests]: {"n":2,"nInserted":0,"nModified":0,"ok":0,"err":"E-gen"}')
+    })
+
+    it('U21c funTest之save回傳非陣列且無失敗者照舊', async function() {
+        //R-ORM-RESULT-01: undefined、null、無ok鍵之物件、ok為1之聚合物件不判失敗(同U20)
+        for (let rSave of [undefined, null, {}, { n: 2, ok: 1 }]) {
+            let woItems = {
+                tests: {
+                    save: async () => rSave,
+                },
+            }
+            await genTestData(dsGen, woItems, { mode: 'funTest', bLog: false })
+        }
     })
 
     it('U23 funTestAndSave與funTest之逐筆失敗訊息相同', async function() {

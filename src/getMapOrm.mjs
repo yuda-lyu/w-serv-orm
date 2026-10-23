@@ -16,6 +16,7 @@ import isestr from 'wsemi/src/isestr.mjs'
 import isnum from 'wsemi/src/isnum.mjs'
 import clearXSS from 'wsemi/src/clearXSS.mjs'
 import getItemsFail from 'w-data-collector/src/getItemsFail.mjs'
+import isOrmFail from './isOrmFail.mjs'
 
 
 function getMsgFail(msg, fails) {
@@ -1299,13 +1300,24 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt) {
             return Promise.reject(err)
         }
 
+        //check, insert之錯誤皆屬整批性而reject, 其回傳為聚合物件且ok恆為1; 聚合結果ok為0或逐筆陣列任一筆ok為0者(ORM違約, 見isOrmFail)視為失敗, 不可回成功, 以固定字串整批reject
+        if (mode === 'insert' && isOrmFail(r)) {
+            console.log(`${woName}.insert fail`, r)
+            return Promise.reject('failed to insert data')
+        }
+
         //check, save單筆失敗時整批仍resolve並以該筆ok為0回報, 須逐筆檢查
-        //insert之錯誤皆屬整批性而reject, 其回傳為聚合物件而非逐筆陣列, 故不須檢查
         if (mode === 'save') {
             let fails = getItemsFail(r, input)
             if (size(fails) > 0) {
                 console.log(`${woName}.save fail`, fails)
                 return Promise.reject(getMsgFail('failed to save data', getItemsFail(r, inputOrig)))
+            }
+
+            //check, 回傳聚合物件而ok為0(非契約形狀)者無從逐筆列出, 仍視為失敗, 固定字串reject(R-ORM-RESULT-01); 陣列形之失敗已於上方列出
+            if (isOrmFail(r)) {
+                console.log(`${woName}.save fail`, r)
+                return Promise.reject('failed to save data')
             }
 
             //check, 只改不增者之事後偵測: 逐筆n為0表檢查後、寫入前該列被他方刪除(表鎖紀律被破壞), 已寫入之筆無從回復, 仍回報rowNotFound
@@ -1380,6 +1392,11 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt) {
                 console.log(`${woName}.del fail`, fails)
                 err = getMsgFail('failed to delete data', fails)
             }
+            else if (isOrmFail(r)) {
+                //回傳聚合物件而ok為0(非契約形狀)者無從逐筆列出, 仍視為失敗, 固定字串(R-ORM-RESULT-01)
+                console.log(`${woName}.del fail`, r)
+                err = 'failed to delete data'
+            }
         }
 
         //check, 刪除回報未命中者之事後偵測: 逐筆nDeleted或n為0表檢查後、刪除前該列被他方刪除(表鎖紀律被破壞), 已刪除之筆無從回復, 仍回報rowNotFound
@@ -1404,6 +1421,12 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt) {
                 console.log(`${woName}.delAll catch`, msg)
                 err = 'failed to delete data'
             })
+
+        //check, delAll契約為聚合物件且ok恆為1(錯誤皆整批reject); ok為0或逐筆陣列任一筆ok為0者(ORM違約, 見isOrmFail)視為失敗, 不可回成功(R-ORM-RESULT-01)
+        if (!isestr(err) && isOrmFail(r)) {
+            console.log(`${woName}.delAll fail`, r)
+            err = 'failed to delete data'
+        }
 
     }
     else if (mode === 'mix') {
@@ -1539,7 +1562,7 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt) {
             }
 
             //insert
-            await wo.insert(add)
+            let rsAdd = await wo.insert(add)
                 .catch((msg) => {
                     console.log(`${woName}.insert catch`, msg)
                     err = 'failed to insert data'
@@ -1548,6 +1571,12 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt) {
             //check
             if (isestr(err)) {
                 return Promise.reject(err)
+            }
+
+            //check, 同單獨insert, 回報失敗者(isOrmFail)視為整批性失敗, 立即reject, 後續步驟不執行
+            if (isOrmFail(rsAdd)) {
+                console.log(`${woName}.insert fail`, rsAdd)
+                return Promise.reject('failed to insert data')
             }
 
             //r
@@ -1577,6 +1606,11 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt) {
             if (size(fails) > 0) {
                 console.log(`${woName}.del fail`, fails)
                 msgsFail.push(getMsgFail('failed to delete data', fails))
+            }
+            else if (isOrmFail(rs)) {
+                //回傳聚合物件而ok為0(非契約形狀)者無從逐筆列出, 視為該步驟整批性失敗, 立即reject, 後續步驟不執行(R-ORM-RESULT-01)
+                console.log(`${woName}.del fail`, rs)
+                return Promise.reject('failed to delete data')
             }
 
             //r
@@ -1612,6 +1646,11 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt) {
             if (size(fails) > 0) {
                 console.log(`${woName}.save fail`, fails)
                 msgsFail.push(getMsgFail('failed to update data', getItemsFail(rs, diffOrig)))
+            }
+            else if (isOrmFail(rs)) {
+                //同上, 回傳聚合物件而ok為0(非契約形狀)者立即reject(R-ORM-RESULT-01)
+                console.log(`${woName}.save fail`, rs)
+                return Promise.reject('failed to update data')
             }
 
             //r
