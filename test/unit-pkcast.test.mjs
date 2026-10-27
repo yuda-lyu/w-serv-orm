@@ -245,9 +245,9 @@ describe('R-ID-02 字串型主鍵欄之數字主鍵以字串處置', function() 
         assert.deepStrictEqual(finds, findsCopy)
     })
 
-    it('N11 ORM以reject拒絕條件: select以failed to select data、delAll以failed to delete data固定字串回傳, ORM原文只進log', async function() {
-        //R-WL-01 規則4; R-ERR-01 規則1: 後端(白名單)拒絕時之錯誤回傳路徑, ORM之reject為Error物件或字串皆然
-        let so = WServOrm(dsStr, WOrmStub, 'u', 'd')
+    it('N11 ORM以reject拒絕條件: select以failed to select data、delAll以failed to delete data固定字串回傳, ORM原文只進log(opt.logDetail為true時, R-DIAG-01)', async function() {
+        //R-WL-01 規則4; R-ERR-01 規則1: 後端(白名單)拒絕時之錯誤回傳路徑, ORM之reject為Error物件或字串皆然; 診斷輸出預設不含原文, 此處以logDetail為true取得
+        let so = WServOrm(dsStr, WOrmStub, 'u', 'd', { logDetail: true })
         let find = { id: { $not: { $eq: 5 } } }
         for (let orig of [new Error('invalid find: unsupported operator [$not] at [find.id.$not]'), 'invalid find: unsupported operator [$not] at [find.id.$not]']) {
             for (let [mode, msg] of [['select', 'failed to select data'], ['delAll', 'failed to delete data']]) {

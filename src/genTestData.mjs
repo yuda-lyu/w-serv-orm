@@ -5,6 +5,7 @@ import isfun from 'wsemi/src/isfun.mjs'
 import pmSeries from 'wsemi/src/pmSeries.mjs'
 import getItemsFail from 'w-data-collector/src/getItemsFail.mjs'
 import isOrmFail from './isOrmFail.mjs'
+import { getOptLogLoose, getDiag, getBriefCount } from './getDiag.mjs'
 
 
 async function genTestData(ds, woItems, opt = {}) {
@@ -14,6 +15,9 @@ async function genTestData(ds, woItems, opt = {}) {
     if (!isbol(bLog)) {
         bLog = true
     }
+
+    //diag, bLog為true時之輸出預設只列筆數而不列資料列(含主鍵), opt.logDetail為true還原完整輸出, opt.funLog收完整細節(R-DIAG-01); 型別錯誤者忽略, 同bLog
+    let diag = getDiag(getOptLogLoose(opt))
 
     //mode
     let mode = get(opt, 'mode')
@@ -33,7 +37,7 @@ async function genTestData(ds, woItems, opt = {}) {
             let rs = await v.funTestAndSave(woItems)
 
             if (bLog) {
-                console.log(`${k}.funTestAndSave`, rs)
+                diag(`${k}.funTestAndSave`, { n: getBriefCount(rs) }, () => rs)
             }
         }
         else {
@@ -61,7 +65,7 @@ async function genTestData(ds, woItems, opt = {}) {
             }
 
             if (bLog) {
-                console.log(`${k}.funTest and save`, rs)
+                diag(`${k}.funTest and save`, { n: getBriefCount(rs) }, () => rs)
             }
         }
 

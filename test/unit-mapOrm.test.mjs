@@ -378,42 +378,48 @@ describe('mapOrm逐筆失敗', function() {
         }
     })
 
-    it('U19d insert聚合結果ok為0時錯誤原文只進log而不進reject訊息', async function() {
-        //R06: 前端訊息為固定字串, 錯誤原文由console.log輸出
+    it('U19d insert聚合結果ok為0時錯誤原文不進reject訊息, 預設不進log, logDetail為true時進log', async function() {
+        //R06: 前端訊息為固定字串, 錯誤原文只在診斷輸出之細節(R-DIAG-01: 預設不輸出原文, opt.logDetail為true還原console.log輸出)
         plan.insert = (data) => ({ n: data.length, nInserted: 0, ok: 0, err: 'E-secret-detail' })
-        let logs = []
-        let logOrig = console.log
-        console.log = (...args) => {
-            logs.push(args)
+        for (let [opt, expectLog] of [[undefined, false], [{ logDetail: true }, true]]) {
+            let procD = (mode, input) => WServOrm(ds, WOrmStub, 'stub-url', 'stub-db', opt).procOrm('u1', 'tests', mode, input)
+            let logs = []
+            let logOrig = console.log
+            console.log = (...args) => {
+                logs.push(args)
+            }
+            let err
+            try {
+                err = await getReject(procD('insert', [{ id: 'i1' }]))
+            }
+            finally {
+                console.log = logOrig
+            }
+            assert.strict.equal(err, 'failed to insert data')
+            assert.strict.equal(JSON.stringify(logs).includes('E-secret-detail'), expectLog)
         }
-        let err
-        try {
-            err = await getReject(proc('insert', [{ id: 'i1' }]))
-        }
-        finally {
-            console.log = logOrig
-        }
-        assert.strict.equal(err, 'failed to insert data')
-        assert.ok(JSON.stringify(logs).includes('E-secret-detail'))
     })
 
-    it('U22 錯誤原文寫入log而不進reject訊息', async function() {
-        //R06: 前端訊息只帶主鍵, 錯誤原文由console.log輸出
+    it('U22 錯誤原文不進reject訊息, 預設不進log, logDetail為true時進log', async function() {
+        //R06: 前端訊息只帶主鍵, 錯誤原文只在診斷輸出之細節(R-DIAG-01)
         plan.save = () => [{ n: 1, nInserted: 0, nModified: 0, ok: 0, err: 'E-secret-detail' }]
-        let logs = []
-        let logOrig = console.log
-        console.log = (...args) => {
-            logs.push(args)
+        for (let [opt, expectLog] of [[undefined, false], [{ logDetail: true }, true]]) {
+            let procD = (mode, input) => WServOrm(ds, WOrmStub, 'stub-url', 'stub-db', opt).procOrm('u1', 'tests', mode, input)
+            let logs = []
+            let logOrig = console.log
+            console.log = (...args) => {
+                logs.push(args)
+            }
+            let err
+            try {
+                err = await getReject(procD('save', [{ id: 's1' }]))
+            }
+            finally {
+                console.log = logOrig
+            }
+            assert.ok(!String(err).includes('E-secret-detail'))
+            assert.strict.equal(JSON.stringify(logs).includes('E-secret-detail'), expectLog)
         }
-        let err
-        try {
-            err = await getReject(proc('save', [{ id: 's1' }]))
-        }
-        finally {
-            console.log = logOrig
-        }
-        assert.ok(!String(err).includes('E-secret-detail'))
-        assert.ok(JSON.stringify(logs).includes('E-secret-detail'))
     })
 
 })

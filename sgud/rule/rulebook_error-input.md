@@ -86,7 +86,7 @@
 - 規則:
   1. **可表達失敗者**=契約回傳含 `ok` 欄位之寫入類函數(`insert`、`save`、`del`、`delAll`),一律以 `isOrmFail(r)` 檢查:逐筆陣列任一筆 `ok === 0`(同 `getItemsFail`),或聚合物件 `ok === 0`;**不論契約形狀為何皆判**(契約為陣列者回聚合形、契約為聚合者回陣列形,都是違約,仍視為失敗).命中即 reject(procOrm)或拋 Error(工具路徑),不得當成功.
   2. 其餘回傳(undefined、null、無 `ok` 鍵之物件、空陣列、元素皆 `ok` 非 0 或非物件之陣列、`ok:1` 含略過/未命中之 `n:0`)維持不檢查,對契約內之 ORM 行為零改變.
-  3. 訊息: 契約形狀之逐筆失敗維持列失敗筆主鍵(R-PERITEM-01、R-MSG-01);違約形狀(聚合形於 save、del;任何形狀於 insert、delAll)無從逐筆列出,固定字串 `failed to insert data`、`failed to save data`、`failed to delete data`、`failed to update data`(mix 之 diff),ORM 回傳原文只進 console.log.工具路徑(recover、genTestData)為 Error,訊息含 ORM 回傳原文(R-DB-01 規則 3).
+  3. 訊息: 契約形狀之逐筆失敗維持列失敗筆主鍵(R-PERITEM-01、R-MSG-01);違約形狀(聚合形於 save、del;任何形狀於 insert、delAll)無從逐筆列出,固定字串 `failed to insert data`、`failed to save data`、`failed to delete data`、`failed to update data`(mix 之 diff),ORM 回傳原文預設不輸出,只在診斷輸出之細節(`opt.logDetail`、`opt.funLog`,R-DIAG-01;2026-10-28 orm-run01 由「只進 console.log」改).工具路徑(recover、genTestData)為 Error,訊息含 ORM 回傳原文(R-DB-01 規則 3;Error 訊息為回傳契約,不受 R-DIAG-01 影響).
   4. **mix**: add 之違約(聚合或陣列)、del 與 diff 之聚合形違約皆視為整批性錯誤,立即 reject,後續步驟不執行(R-PERITEM-01 規則 3);契約形狀之逐筆失敗仍待全部步驟完成後一併 reject.
   5. **讀取類不檢查**: `select` 之回傳為數據列,列內欄位可能名為 `ok`,以 `isOrmFail` 判讀會把正常數據誤判為失敗;失敗只以 reject 表達.`createStorage`、`close` 之回傳為狀態值,失敗以 reject 表達,無 `ok` 可檢.
   6. **新增 ORM 呼叫站點須先歸類**: `test/unit-ormsites.test.mjs`(O01)逐行去除註解後盤點 `src/*.mjs` 內 `.方法(` 之呼叫次數,與下表一致;不一致即失敗,須回本表判定「已檢查」或「不適用」後再更新測試之預期表.不得以括號記法或動態方法名呼叫 ORM(O02),ORM 建構僅 `getWoItems` 一處(O03).
@@ -114,10 +114,11 @@
 | 17 | `getDb.mjs:79` | `br.backup(woItems)` | 本套件內函數(委派) | — | 不適用(無 ORM 回傳;其 ORM 站點為 #10) |
 | 18 | `getDb.mjs:146` | `br.recover(...)`(委派) | 本套件內函數(委派) | — | 不適用(無 ORM 回傳;其 ORM 站點為 #11、#12) |
 | 19 | `getWoItems.mjs:42` | `new WOrm(useOpt)`(建構) | 實例;失敗以拋錯表達 | 拋錯原樣轉出 | 不適用(建構無回傳可檢查,O03) |
+| 20 | `WServOrm.mjs:231` | `getDbBackupAndRecover.recover(...)`(實例上 recover 之包裝,帶入診斷設定,orm-run01) | 本套件內函數(委派) | — | 不適用(無 ORM 回傳;其 ORM 站點為 #11、#12;`unit-ormsites` O01 之 `WServOrm.mjs` 計 recover:1) |
 | E1 | `node_modules/w-data-collector/src/build.mjs:96`(外部,不屬本套件) | `wo[keyTable].createStorage()`(funTestAndSave) | 狀態字串 | — | 不適用(規則 5) |
 | E2 | 同上 `:100` | `wo[keyTable].save(rs)`(funTestAndSave) | 逐筆陣列 | 逐筆已檢查(getItemsFail);聚合形違約未檢查 | **外部缺口,本套件不得改**: 待通報 w-data-collector(主控裁示),影響僅 genTestData 之 funTestAndSave 模式 |
 
-- 統計: 19 站 = 已檢查 9(#3、#4、#5、#6、#7、#8、#9、#12、#15;其中本輪補強 #4、#5、#6、#8、#9、#15 共 6 站)+ 不適用 10(#1、#2、#10、#11、#13、#14、#16、#17、#18、#19);未歸類 0.
+- 統計: 20 站(orm-run01 增 #20) = 已檢查 9(#3、#4、#5、#6、#7、#8、#9、#12、#15;其中 orm-run05 補強 #4、#5、#6、#8、#9、#15 共 6 站)+ 不適用 11(#1、#2、#10、#11、#13、#14、#16、#17、#18、#19、#20);未歸類 0.
 - 測試: `test/unit-mapOrm.test.mjs` U03b/c、U10c、U12b、U14b/c/d、U21b/c、U24/b/c/d;`test/api-procOrm.test.mjs` F06-F09(真 w-orm-lowdb 包一層注入);`test/unit-isOrmFail.test.mjs` V01-V03;`test/unit-ormsites.test.mjs` O01-O03;`test/unit-getDb.test.mjs` B05b-B05f(recover).
 - 變更紀錄: 2026-10-23 orm-run05 新增(主控裁示:run04 觀察 delAll、createStorage 未檢查,一次盤點全部站點).
 

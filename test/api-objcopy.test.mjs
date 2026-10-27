@@ -79,7 +79,7 @@ describe('R-OBJ-01 接w-orm-lowdb(以JS參考實作為預言機)', function() {
     before(function() {
         fs.rmSync(fd, { recursive: true, force: true })
         fs.mkdirSync(fd, { recursive: true })
-        so = WServOrm(ds, WOrm, `${fd}/db.json`, 'worm')
+        so = WServOrm(ds, WOrm, `${fd}/db.json`, 'worm', { logDetail: true }) //診斷輸出設為完整細節(R-DIAG-01): A26驗證被拒find的快照輸出不執行使用端程式, 須在輸出細節時才有意義
         for (let fn of ['select', 'delAll']) {
             let orig = so.woItems.tabA[fn].bind(so.woItems.tabA)
             so.woItems.tabA[fn] = async (data) => {

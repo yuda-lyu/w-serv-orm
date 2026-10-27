@@ -3,31 +3,36 @@ import keys from 'lodash-es/keys.js'
 import iseobj from 'wsemi/src/iseobj.mjs'
 import isfun from 'wsemi/src/isfun.mjs'
 import isestr from 'wsemi/src/isestr.mjs'
+import { getDiag, getBriefType } from './getDiag.mjs'
 
 
-function getWoItems(ds, WOrm, url, db) {
+function getWoItems(ds, WOrm, url, db, optLog = undefined) {
+    //optLog(選用, 內部): getDiag可收之{ logDetail, funLog }, 無效參數之診斷輸出依其設定(R-DIAG-01): 預設只列型別, 不列呼叫端傳入之無效值(可能含連線字串帳密等)
+
+    //diag
+    let diag = getDiag(optLog)
 
     //check ds
     if (!iseobj(ds)) {
-        console.log('ds', ds)
+        diag('ds', getBriefType(ds), () => ds)
         throw new Error('invalid ds')
     }
 
     //check WOrm
     if (!isfun(WOrm)) {
-        console.log('WOrm', WOrm)
+        diag('WOrm', getBriefType(WOrm), () => WOrm)
         throw new Error('invalid WOrm')
     }
 
     //check url
     if (!isestr(url)) {
-        console.log('url', url)
+        diag('url', getBriefType(url), () => url)
         throw new Error('invalid url')
     }
 
     //check db
     if (!isestr(db)) {
-        console.log('db', db)
+        diag('db', getBriefType(db), () => db)
         throw new Error('invalid db')
     }
 

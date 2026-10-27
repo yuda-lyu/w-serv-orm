@@ -17,10 +17,15 @@ import isnum from 'wsemi/src/isnum.mjs'
 import clearXSS from 'wsemi/src/clearXSS.mjs'
 import getItemsFail from 'w-data-collector/src/getItemsFail.mjs'
 import isOrmFail from './isOrmFail.mjs'
+import { getOptLog, getDiag, getBriefErr, getBriefFails, getBriefResult, getBriefType, cpDetail } from './getDiag.mjs'
+
+
+//MODES_PROC, procOrm之mode全集: 邊界catch之標籤只放行這些固定值(R-DIAG-01)
+const MODES_PROC = ['select', 'insert', 'save', 'del', 'delAll', 'mix']
 
 
 function getMsgFail(msg, fails) {
-    //前端訊息僅列出失敗筆, 錯誤原文另由console.log輸出, 與既有整批錯誤之處理一致
+    //前端訊息僅列出失敗筆, 錯誤原文另由診斷輸出(diag, 預設只列筆數與位置, 見R-DIAG-01)輸出, 與既有整批錯誤之處理一致
     //有效主鍵(非空字串或數字)列為id[...], 否則列其於輸入內之位置, 失敗筆數過多時僅列前nShow筆並附總筆數
     //呼叫端給予位置標籤ref者(如mix同鍵之add[0])原樣列出
     //主鍵超過nIdMax字元者截斷顯示(LMDB逐筆失敗常因主鍵超長, 故兩者常同時出現), log仍保留全文
@@ -315,22 +320,6 @@ function hasWeakSlot(o) {
 }
 
 
-function logSafe(label, ...args) {
-    //診斷用之console.log: 引數若含使用端物件(如mapOrm catch輸出之被拋出的值)會被格式化而呼叫其util.inspect.custom等, 拋錯不得使procOrm之reject變成例外物件(R-ERR-01 規則5); find一律經logFind輸出快照(R-OBJ-01 規則6 ⑤)
-    try {
-        console.log(label, ...args)
-    }
-    catch (e) {
-        try {
-            console.log(label, '(unprintable)')
-        }
-        catch (e2) {
-            //放棄輸出
-        }
-    }
-}
-
-
 function snapSafe(v, st = { n: 0 }, depth = 0) {
     //診斷輸出用之安全快照(R-OBJ-01 規則6 ⑤): 回傳本層新建之純資料, 全程只用型別探針(util.types)與屬性描述子, 不呼叫getter、不讀Symbol.toStringTag、不觸發Proxy陷阱、不呼叫util.inspect.custom,
     //故console.log格式化的是快照而非使用端物件(原以console.log輸出原物件時, 格式化會在拒收之後執行使用端程式, 其副作用可改動呼叫端的find);
@@ -397,16 +386,16 @@ function snapSafe(v, st = { n: 0 }, depth = 0) {
 }
 
 
-function logFind(label, input) {
-    //被拒之find的診斷輸出(R-OBJ-01 規則6 ⑤): 輸出snapSafe之快照而非原物件, 不執行使用端程式
-    let snap
-    try {
-        snap = snapSafe(input)
-    }
-    catch (e) {
-        snap = '(unprintable)'
-    }
-    logSafe(label, snap)
+function logFind(diag, label, errFind, input) {
+    //被拒之find的診斷輸出(R-OBJ-01 規則6 ⑤、R-DIAG-01): 預設只輸出拒收原因(固定句型, 不含條件值); 細節(logDetail為true或funLog收到者)為snapSafe之快照而非原物件, 不執行使用端程式
+    diag(label, { reason: errFind }, () => {
+        try {
+            return snapSafe(input)
+        }
+        catch (e) {
+            return '(unprintable)'
+        }
+    })
 }
 
 
@@ -1022,7 +1011,7 @@ function getItemsIdXSS(data) {
 
 
 function getMsgIdXSS(msg, fails) {
-    //主鍵含HTML標記, 訊息只列位置不回顯主鍵, 主鍵原文另由console.log輸出
+    //主鍵含HTML標記, 訊息只列位置不回顯主鍵, 主鍵原文只在診斷輸出之細節(logDetail或funLog, R-DIAG-01)
     return getMsgFail(`${msg}, id contains HTML markup`, map(fails, (v) => {
         return { k: v.k }
     }))
@@ -1036,11 +1025,11 @@ function setOwnData(o, k, v) {
 }
 
 
-function adjustData(ds, woName, userId, data, mode = 'save', keepUserId = false) { //mode: 'insert', 'save', 'insert+save'; keepUserId只由insert傳true(R-KEEPUSER-01)
+function adjustData(ds, woName, userId, data, mode = 'save', keepUserId = false, diag = undefined) { //mode: 'insert', 'save', 'insert+save'; keepUserId只由insert傳true(R-KEEPUSER-01); diag為診斷輸出(R-DIAG-01)
 
     //check
     if (!iseobj(ds)) {
-        console.log('ds', ds)
+        diag('ds', getBriefType(ds), () => ds)
         throw new Error('invalid ds')
     }
 
@@ -1145,23 +1134,33 @@ function adjustData(ds, woName, userId, data, mode = 'save', keepUserId = false)
 }
 
 
-async function mapOrm(ds, woItems, userId, woName, mode, input, opt) {
+async function mapOrm(ds, woItems, userId, woName, mode, input, opt, diag) {
     //邊界保證(R-ERR-01 規則5): execMapOrm之檢查、轉型與ORM呼叫階段, 非字串之例外(RangeError、使用端物件之Proxy陷阱/toString拋錯、woItems之非ORM值等)
-    //一律console.log原文後以固定字串reject, 不轉出例外物件與其拋出之值; 字串(各處之固定訊息)原樣轉出
+    //一律診斷輸出(預設只列錯誤類別, 原文為細節)後以固定字串reject, 不轉出例外物件與其拋出之值; 字串(各處之固定訊息)原樣轉出
     try {
-        return await execMapOrm(ds, woItems, userId, woName, mode, input, opt)
+        return await execMapOrm(ds, woItems, userId, woName, mode, input, opt, diag)
     }
     catch (e) {
         if (typeof e === 'string') {
             return Promise.reject(e)
         }
-        logSafe(`${typeof woName === 'string' ? woName : ''}.${typeof mode === 'string' ? mode : ''} mapOrm catch`, e)
+        //標籤只放行已驗證之表名(woItems之自有鍵)與固定之mode, 其餘以空字串代替(此時外部傳入之字串尚未驗證, 不得回顯)
+        let nameOk = false
+        try {
+            nameOk = typeof woName === 'string' && Object.prototype.hasOwnProperty.call(woItems, woName)
+        }
+        catch (e2) {
+            //woItems為已撤銷之Proxy等: 不回顯
+        }
+        let modeOk = typeof mode === 'string' && MODES_PROC.indexOf(mode) >= 0
+        diag(`${nameOk ? woName : ''}.${modeOk ? mode : ''} mapOrm catch`, getBriefErr(e), () => e)
         return Promise.reject('failed to process input')
     }
 }
 
 
-async function execMapOrm(ds, woItems, userId, woName, mode, input, opt) {
+async function execMapOrm(ds, woItems, userId, woName, mode, input, opt, diag) {
+    //診斷輸出(R-DIAG-01): 一律經diag(label, safe, getDetail), 預設只輸出標籤與不含主鍵、資料值、ORM錯誤原文之摘要; 完整細節由logDetail或funLog取得
     //由woName自動綁定至woItems內的ORM物件
     let err = null
     let r
@@ -1193,14 +1192,14 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt) {
         //check, 條件若給予須為一般物件且不含自有__proto__鍵(R-INPUT-01 規則3、R-OBJ-01 規則3), 於轉型與查詢之前
         let errFind = getErrFind('select', input)
         if (errFind !== null) {
-            logFind(`${woName}.select invalid find`, input)
+            logFind(diag, `${woName}.select invalid find`, errFind, input)
             return Promise.reject(errFind)
         }
 
         //select, 條件中主鍵之比較值轉型(R-ID-02)
         r = await wo.select(idCast ? castIdFind(input) : input)
             .catch((msg) => {
-                console.log(`${woName}.select catch`, msg)
+                diag(`${woName}.select catch`, getBriefErr(msg), () => msg)
                 err = 'failed to select data'
             })
 
@@ -1221,21 +1220,21 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt) {
         //check, 批次容器須為乾淨之真密陣列(Proxy、標籤、空洞), 於讀取任何元素之前
         let errBatch = getErrBatch(msgMode, input)
         if (errBatch !== null) {
-            console.log(`${woName}.${mode} invalid batch container`)
+            diag(`${woName}.${mode} invalid batch container`)
             return Promise.reject(errBatch)
         }
 
         //check, 各筆須為一般物件, 否則整批拒絕且不寫入任何一筆(R-INPUT-01)
         let failsNotObj = getItemsNotObj(input)
         if (size(failsNotObj) > 0) {
-            console.log(`${woName}.${mode} data is not an object`, failsNotObj)
+            diag(`${woName}.${mode} data is not an object`, getBriefFails(failsNotObj), () => cpDetail(failsNotObj))
             return Promise.reject(getMsgFail(`${msgMode}, not an object`, failsNotObj))
         }
 
         //check, 各筆任何深度不得含自有__proto__鍵與存取器屬性, 否則整批拒絕且不寫入任何一筆(R-OBJ-01 規則3)
         let msgsBadKey = getMsgsBadKey(msgMode, input)
         if (size(msgsBadKey) > 0) {
-            console.log(`${woName}.${mode} data has unsupported key`, msgsBadKey)
+            diag(`${woName}.${mode} data has unsupported key`, [...msgsBadKey], () => [...msgsBadKey]) //訊息為固定句型加位置, 不含主鍵與資料值; 交出拷貝
             return Promise.reject(join(msgsBadKey, '; '))
         }
 
@@ -1247,16 +1246,17 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt) {
         //check, 主鍵會被clearXSS改寫者整批拒絕, 不寫入任何一筆
         let failsIdXSS = getItemsIdXSS(input)
         if (size(failsIdXSS) > 0) {
-            console.log(`${woName}.${mode} id changed by clearXSS`, failsIdXSS)
+            diag(`${woName}.${mode} id changed by clearXSS`, getBriefFails(failsIdXSS), () => cpDetail(failsIdXSS))
             return Promise.reject(getMsgIdXSS(msgMode, failsIdXSS))
         }
 
         //adjustData
         try {
-            input = adjustData(ds, woName, userId, input, mode, optProc.keepUserId)
+            input = adjustData(ds, woName, userId, input, mode, optProc.keepUserId, diag)
         }
         catch (e) {
-            console.log(`${woName}.adjustData catch`, e.toString())
+            let msgE = e.toString() //同舊版立即求值: 例外之toString拋錯(如拋出null)者交邊界保證轉為failed to process input, 診斷輸出不改變此結果
+            diag(`${woName}.adjustData catch`, getBriefErr(e), () => msgE)
             err = 'failed to adjust data'
             return Promise.reject(err)
         }
@@ -1266,14 +1266,14 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt) {
         if (mode === 'save' && optProc.mustExist) {
             let missing = await hasMissingRow(wo, input)
                 .catch((msg) => {
-                    console.log(`${woName}.save exist check catch`, msg)
+                    diag(`${woName}.save exist check catch`, getBriefErr(msg), () => msg)
                     err = 'failed to save data'
                 })
             if (isestr(err)) {
                 return Promise.reject(err)
             }
             if (missing) {
-                console.log(`${woName}.save row not found`)
+                diag(`${woName}.save row not found`)
                 return Promise.reject('rowNotFound')
             }
         }
@@ -1282,7 +1282,7 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt) {
         if (mode === 'insert') {
             r = await wo.insert(input)
                 .catch((msg) => {
-                    console.log(`${woName}.insert catch`, msg)
+                    diag(`${woName}.insert catch`, getBriefErr(msg), () => msg)
                     err = 'failed to insert data'
                 })
         }
@@ -1290,7 +1290,7 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt) {
             //只改不增者轉傳autoInsert:false(各ORM於未命中時不寫入); 其餘維持單參數呼叫
             r = await (optProc.mustExist ? wo.save(input, { autoInsert: false }) : wo.save(input))
                 .catch((msg) => {
-                    console.log(`${woName}.save catch`, msg)
+                    diag(`${woName}.save catch`, getBriefErr(msg), () => msg)
                     err = 'failed to save data'
                 })
         }
@@ -1302,7 +1302,7 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt) {
 
         //check, insert之錯誤皆屬整批性而reject, 其回傳為聚合物件且ok恆為1; 聚合結果ok為0或逐筆陣列任一筆ok為0者(ORM違約, 見isOrmFail)視為失敗, 不可回成功, 以固定字串整批reject
         if (mode === 'insert' && isOrmFail(r)) {
-            console.log(`${woName}.insert fail`, r)
+            diag(`${woName}.insert fail`, getBriefResult(r), () => r)
             return Promise.reject('failed to insert data')
         }
 
@@ -1310,19 +1310,19 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt) {
         if (mode === 'save') {
             let fails = getItemsFail(r, input)
             if (size(fails) > 0) {
-                console.log(`${woName}.save fail`, fails)
+                diag(`${woName}.save fail`, getBriefFails(fails), () => cpDetail(fails))
                 return Promise.reject(getMsgFail('failed to save data', getItemsFail(r, inputOrig)))
             }
 
             //check, 回傳聚合物件而ok為0(非契約形狀)者無從逐筆列出, 仍視為失敗, 固定字串reject(R-ORM-RESULT-01); 陣列形之失敗已於上方列出
             if (isOrmFail(r)) {
-                console.log(`${woName}.save fail`, r)
+                diag(`${woName}.save fail`, getBriefResult(r), () => r)
                 return Promise.reject('failed to save data')
             }
 
             //check, 只改不增者之事後偵測: 逐筆n為0表檢查後、寫入前該列被他方刪除(表鎖紀律被破壞), 已寫入之筆無從回復, 仍回報rowNotFound
             if (optProc.mustExist && hasNoHit(r, null)) {
-                console.log(`${woName}.save row not found after check`)
+                diag(`${woName}.save row not found after check`)
                 return Promise.reject('rowNotFound')
             }
         }
@@ -1344,7 +1344,7 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt) {
         //check, 批次容器須為乾淨之真密陣列; 刪除之各筆仍不檢查(交後端逐筆處置)
         let errBatch = getErrBatch('failed to delete data', input)
         if (errBatch !== null) {
-            console.log(`${woName}.del invalid batch container`)
+            diag(`${woName}.del invalid batch container`)
             return Promise.reject(errBatch)
         }
 
@@ -1360,20 +1360,20 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt) {
             //check, 同批重複主鍵整批拒絕, 訊息列其位置而不回顯主鍵(同R-MIX-01)
             let failsDup = getItemsDupId(input)
             if (size(failsDup) > 0) {
-                console.log(`${woName}.del duplicate id`, failsDup)
+                diag(`${woName}.del duplicate id`, getBriefFails(failsDup), () => cpDetail(failsDup))
                 return Promise.reject(getMsgFail('invalid input of del, duplicate id', failsDup))
             }
 
             let missing = await hasMissingRow(wo, input)
                 .catch((msg) => {
-                    console.log(`${woName}.del exist check catch`, msg)
+                    diag(`${woName}.del exist check catch`, getBriefErr(msg), () => msg)
                     err = 'failed to delete data'
                 })
             if (isestr(err)) {
                 return Promise.reject(err)
             }
             if (missing) {
-                console.log(`${woName}.del row not found`)
+                diag(`${woName}.del row not found`)
                 return Promise.reject('rowNotFound')
             }
         }
@@ -1381,7 +1381,7 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt) {
         //del
         r = await wo.del(input)
             .catch((msg) => {
-                console.log(`${woName}.del catch`, msg)
+                diag(`${woName}.del catch`, getBriefErr(msg), () => msg)
                 err = 'failed to delete data'
             })
 
@@ -1389,19 +1389,19 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt) {
         if (!isestr(err)) {
             let fails = getItemsFail(r, input)
             if (size(fails) > 0) {
-                console.log(`${woName}.del fail`, fails)
+                diag(`${woName}.del fail`, getBriefFails(fails), () => cpDetail(fails))
                 err = getMsgFail('failed to delete data', fails)
             }
             else if (isOrmFail(r)) {
                 //回傳聚合物件而ok為0(非契約形狀)者無從逐筆列出, 仍視為失敗, 固定字串(R-ORM-RESULT-01)
-                console.log(`${woName}.del fail`, r)
+                diag(`${woName}.del fail`, getBriefResult(r), () => r)
                 err = 'failed to delete data'
             }
         }
 
         //check, 刪除回報未命中者之事後偵測: 逐筆nDeleted或n為0表檢查後、刪除前該列被他方刪除(表鎖紀律被破壞), 已刪除之筆無從回復, 仍回報rowNotFound
         if (!isestr(err) && optProc.mustExist && hasNoHit(r, 'nDeleted')) {
-            console.log(`${woName}.del row not found after check`)
+            diag(`${woName}.del row not found after check`)
             err = 'rowNotFound'
         }
 
@@ -1411,20 +1411,20 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt) {
         //check, 條件若給予須為一般物件(R-INPUT-01 規則3): 舊版(未實作系列條件白名單)後端對非物件之條件一律視為無條件而刪除全表; 未給(undefined)與空物件依規格為刪除全部; 另不得含自有__proto__鍵(R-OBJ-01 規則3)
         let errFind = getErrFind('delAll', input)
         if (errFind !== null) {
-            logFind(`${woName}.delAll invalid find`, input)
+            logFind(diag, `${woName}.delAll invalid find`, errFind, input)
             return Promise.reject(errFind)
         }
 
         //delAll, 條件中主鍵之比較值轉型(R-ID-02)
         r = await wo.delAll(idCast ? castIdFind(input) : input)
             .catch((msg) => {
-                console.log(`${woName}.delAll catch`, msg)
+                diag(`${woName}.delAll catch`, getBriefErr(msg), () => msg)
                 err = 'failed to delete data'
             })
 
         //check, delAll契約為聚合物件且ok恆為1(錯誤皆整批reject); ok為0或逐筆陣列任一筆ok為0者(ORM違約, 見isOrmFail)視為失敗, 不可回成功(R-ORM-RESULT-01)
         if (!isestr(err) && isOrmFail(r)) {
-            console.log(`${woName}.delAll fail`, r)
+            diag(`${woName}.delAll fail`, getBriefResult(r), () => r)
             err = 'failed to delete data'
         }
 
@@ -1463,7 +1463,7 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt) {
             }
         }
         if (size(msgsBatch) > 0) {
-            console.log(`${woName}.mix invalid batch container`)
+            diag(`${woName}.mix invalid batch container`)
             return Promise.reject(join(msgsBatch, '; '))
         }
 
@@ -1472,7 +1472,7 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt) {
         for (let [key, msg] of [['add', 'failed to insert data'], ['diff', 'failed to update data']]) {
             let fails = getItemsNotObj(get(input, key, []))
             if (size(fails) > 0) {
-                console.log(`${woName}.mix ${key} data is not an object`, fails)
+                diag(`${woName}.mix ${key} data is not an object`, getBriefFails(fails), () => cpDetail(fails))
                 msgsNotObj.push(getMsgFail(`${msg}, not an object`, fails))
             }
         }
@@ -1486,14 +1486,14 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt) {
             msgsBadKey.push(...getMsgsBadKey(msg, get(input, key, [])))
         }
         if (size(msgsBadKey) > 0) {
-            console.log(`${woName}.mix data has unsupported key`, msgsBadKey)
+            diag(`${woName}.mix data has unsupported key`, [...msgsBadKey], () => [...msgsBadKey]) //訊息為固定句型加位置, 不含主鍵與資料值; 交出拷貝
             return Promise.reject(join(msgsBadKey, '; '))
         }
 
         //check, del列之id不得為存取器或繼承而來(同鍵防線之前提), 於任何步驟寫入之前整批拒絕
         let failsIrregularId = getItemsIrregularId(get(input, 'del', []))
         if (size(failsIrregularId) > 0) {
-            console.log(`${woName}.mix del id is not an own data property`, failsIrregularId)
+            diag(`${woName}.mix del id is not an own data property`, getBriefFails(failsIrregularId), () => cpDetail(failsIrregularId))
             return Promise.reject(getMsgFail(`failed to delete data, ${MSGS_BAD_KEY.irregular}`, failsIrregularId))
         }
 
@@ -1512,7 +1512,7 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt) {
         for (let [key, msg] of [['add', 'failed to insert data'], ['diff', 'failed to update data']]) {
             let fails = getItemsIdXSS(get(input, key, []))
             if (size(fails) > 0) {
-                console.log(`${woName}.mix ${key} id changed by clearXSS`, fails)
+                diag(`${woName}.mix ${key} id changed by clearXSS`, getBriefFails(fails), () => cpDetail(fails))
                 msgsIdXSS.push(getMsgIdXSS(msg, fails))
             }
         }
@@ -1523,7 +1523,7 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt) {
         //check, add與del、del與diff同鍵者, 於任何步驟寫入之前整批拒絕(R-MIX-01)
         let msgsSameId = getMsgsMixSameId(input)
         if (size(msgsSameId) > 0) {
-            console.log(`${woName}.mix same id across steps`, msgsSameId)
+            diag(`${woName}.mix same id across steps`, [...msgsSameId], () => [...msgsSameId]) //訊息只列各段位置, 不含主鍵; 交出拷貝
             return Promise.reject(join(msgsSameId, '; '))
         }
 
@@ -1539,10 +1539,11 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt) {
         let diffAdj = null
         if (size(get(input, 'diff', [])) > 0) {
             try {
-                diffAdj = adjustData(ds, woName, userId, get(input, 'diff', []))
+                diffAdj = adjustData(ds, woName, userId, get(input, 'diff', []), 'save', false, diag)
             }
             catch (e) {
-                console.log(`${woName}.adjustData catch`, e.toString())
+                let msgE = e.toString() //同上, 立即求值
+                diag(`${woName}.adjustData catch`, getBriefErr(e), () => msgE)
                 err = 'failed to adjust data'
                 return Promise.reject(err)
             }
@@ -1553,10 +1554,11 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt) {
 
             //adjustData
             try {
-                add = adjustData(ds, woName, userId, add, 'insert+save')
+                add = adjustData(ds, woName, userId, add, 'insert+save', false, diag)
             }
             catch (e) {
-                console.log(`${woName}.adjustData catch`, e.toString())
+                let msgE = e.toString() //同上, 立即求值
+                diag(`${woName}.adjustData catch`, getBriefErr(e), () => msgE)
                 err = 'failed to adjust data'
                 return Promise.reject(err)
             }
@@ -1564,7 +1566,7 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt) {
             //insert
             let rsAdd = await wo.insert(add)
                 .catch((msg) => {
-                    console.log(`${woName}.insert catch`, msg)
+                    diag(`${woName}.insert catch`, getBriefErr(msg), () => msg)
                     err = 'failed to insert data'
                 })
 
@@ -1575,7 +1577,7 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt) {
 
             //check, 同單獨insert, 回報失敗者(isOrmFail)視為整批性失敗, 立即reject, 後續步驟不執行
             if (isOrmFail(rsAdd)) {
-                console.log(`${woName}.insert fail`, rsAdd)
+                diag(`${woName}.insert fail`, getBriefResult(rsAdd), () => rsAdd)
                 return Promise.reject('failed to insert data')
             }
 
@@ -1592,7 +1594,7 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt) {
             //del
             let rs = await wo.del(del)
                 .catch((msg) => {
-                    console.log(`${woName}.del catch`, msg)
+                    diag(`${woName}.del catch`, getBriefErr(msg), () => msg)
                     err = 'failed to delete data'
                 })
 
@@ -1604,12 +1606,12 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt) {
             //check, 單筆失敗時整批仍resolve並以該筆ok為0回報, 須逐筆檢查
             let fails = getItemsFail(rs, del)
             if (size(fails) > 0) {
-                console.log(`${woName}.del fail`, fails)
+                diag(`${woName}.del fail`, getBriefFails(fails), () => cpDetail(fails))
                 msgsFail.push(getMsgFail('failed to delete data', fails))
             }
             else if (isOrmFail(rs)) {
                 //回傳聚合物件而ok為0(非契約形狀)者無從逐筆列出, 視為該步驟整批性失敗, 立即reject, 後續步驟不執行(R-ORM-RESULT-01)
-                console.log(`${woName}.del fail`, rs)
+                diag(`${woName}.del fail`, getBriefResult(rs), () => rs)
                 return Promise.reject('failed to delete data')
             }
 
@@ -1632,7 +1634,7 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt) {
             //save
             let rs = await wo.save(diff)
                 .catch((msg) => {
-                    console.log(`${woName}.save catch`, msg)
+                    diag(`${woName}.save catch`, getBriefErr(msg), () => msg)
                     err = 'failed to update data'
                 })
 
@@ -1644,12 +1646,12 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt) {
             //check, 單筆失敗時整批仍resolve並以該筆ok為0回報, 須逐筆檢查
             let fails = getItemsFail(rs, diff)
             if (size(fails) > 0) {
-                console.log(`${woName}.save fail`, fails)
+                diag(`${woName}.save fail`, getBriefFails(fails), () => cpDetail(fails))
                 msgsFail.push(getMsgFail('failed to update data', getItemsFail(rs, diffOrig)))
             }
             else if (isOrmFail(rs)) {
                 //同上, 回傳聚合物件而ok為0(非契約形狀)者立即reject(R-ORM-RESULT-01)
-                console.log(`${woName}.save fail`, rs)
+                diag(`${woName}.save fail`, getBriefResult(rs), () => rs)
                 return Promise.reject('failed to update data')
             }
 
@@ -1680,10 +1682,12 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt) {
 }
 
 
-function getMapOrm(ds, woItems) {
+function getMapOrm(ds, woItems, optServ) {
     //每次呼叫各自綁定ds與woItems並回傳新函數, 令同一行程內之多個實例互不干擾; 回傳函數之參數形狀為(userId, woName, mode, input, opt), 前四個維持, opt為選用(R-ONLYMOD-01)
+    //optServ(選用)為WServOrm之設定物件, 取其logDetail與funLog決定診斷輸出(R-DIAG-01), 未給為預設(安全摘要); 型別錯誤拋Error, 各實例各自持有
+    let diag = getDiag(getOptLog(optServ))
     return async (userId, woName, mode, input, opt) => {
-        return mapOrm(ds, woItems, userId, woName, mode, input, opt)
+        return mapOrm(ds, woItems, userId, woName, mode, input, opt, diag)
     }
 }
 

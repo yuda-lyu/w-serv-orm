@@ -20,12 +20,14 @@ let wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 let clone = (v) => structuredClone(v)
 
 //kinds, 四種資料表型態: 字串型主鍵(轉型與補值)、型別未知(同)、整數型主鍵(皆不)、ds無該表(皆不; 直接呼叫getMapOrm令ds與woItems不一致)
+//診斷輸出設為完整細節(logDetail為true, R-DIAG-01): 預設輸出不含條件與列內容, 而本檔之D07、D07b、C03、S14等案驗證的正是「被拒之find與列的快照輸出不執行使用端程式、保留資料且有上限」, 須在輸出細節時才有意義
+let OPT_LOG = { logDetail: true }
 function getKinds() {
     return [
-        { kind: 'str', cast: true, proc: WServOrm(dsStr, WOrmStub, 'u', 'd').procOrm },
-        { kind: 'unknown', cast: true, proc: WServOrm(dsUnknown, WOrmStub, 'u', 'd').procOrm },
-        { kind: 'int', cast: false, proc: WServOrm(dsInt, WOrmStub, 'u', 'd').procOrm },
-        { kind: 'none', cast: false, proc: getMapOrm({ others: dsStr.tests }, { tests: WOrmStub() }) },
+        { kind: 'str', cast: true, proc: WServOrm(dsStr, WOrmStub, 'u', 'd', OPT_LOG).procOrm },
+        { kind: 'unknown', cast: true, proc: WServOrm(dsUnknown, WOrmStub, 'u', 'd', OPT_LOG).procOrm },
+        { kind: 'int', cast: false, proc: WServOrm(dsInt, WOrmStub, 'u', 'd', OPT_LOG).procOrm },
+        { kind: 'none', cast: false, proc: getMapOrm({ others: dsStr.tests }, { tests: WOrmStub() }, OPT_LOG) },
     ]
 }
 

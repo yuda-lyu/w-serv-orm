@@ -16,6 +16,7 @@ import isbol from 'wsemi/src/isbol.mjs'
 import j2o from 'wsemi/src/j2o.mjs'
 import getItemsFail from 'w-data-collector/src/getItemsFail.mjs'
 import isOrmFail from './isOrmFail.mjs'
+import { getDiag, getBriefResult, getBriefType, cpDetail } from './getDiag.mjs'
 
 
 function getMsgFail(name, r, data, written) {
@@ -47,17 +48,21 @@ function getMsgFail(name, r, data, written) {
 }
 
 
-async function backup(woItems) {
+async function backup(woItems, optLog = undefined) {
+    //optLog(選用, 內部): getDiag可收之{ logDetail, funLog }, 令進度與無效參數之診斷輸出依其設定(R-DIAG-01); 由WServOrm與getDb帶入
+
+    //diag
+    let diag = getDiag(optLog)
 
     //check, 同recover; 否則無效值由pmSeries以字串reject, 而空物件或空陣列會產出recover拒收之空備份
     if (!iseobj(woItems)) {
-        console.log('woItems', woItems)
+        diag('woItems', getBriefType(woItems), () => woItems)
         throw new Error('invalid woItems')
     }
 
-    //rs
+    //rs, 進度輸出表名(為woItems之自有鍵, 即資料表名)
     let rs = await pmSeries(woItems, async (v, k) => {
-        console.log('backup...', k)
+        diag('backup...', k, () => k)
         let r = await v.select()
         return {
             name: k,
@@ -70,15 +75,19 @@ async function backup(woItems) {
 }
 
 
-async function recover(fp, woItems, genModels, needCreateStorage = false) {
+async function recover(fp, woItems, genModels, needCreateStorage = false, optLog = undefined) {
+    //optLog(選用, 內部): getDiag可收之{ logDetail, funLog }, 令逐表insert失敗之診斷輸出依其設定(R-DIAG-01); 由WServOrm與getDb帶入, 直接呼叫者未給即預設(安全摘要)
+
+    //diag
+    let diag = getDiag(optLog)
 
     //check
     if (!fsIsFile(fp)) {
-        console.log('fp', fp)
+        diag('fp', getBriefType(fp), () => fp)
         throw new Error('fp is not exist')
     }
     if (!iseobj(woItems)) {
-        console.log('woItems', woItems)
+        diag('woItems', getBriefType(woItems), () => woItems)
         throw new Error('invalid woItems')
     }
 
@@ -125,9 +134,9 @@ async function recover(fp, woItems, genModels, needCreateStorage = false) {
 
     //funTest
     await pmSeries(rs, async (v) => {
-        console.log('recover...', v.name)
+        diag('recover...', v.name, () => v.name)
         if (needCreateStorage) {
-            console.log('needCreateStorage')
+            diag('needCreateStorage')
             await woItems[v.name].createStorage()
         }
         // await woItems[v.name].delAll() //清空資料庫
@@ -137,8 +146,22 @@ async function recover(fp, woItems, genModels, needCreateStorage = false) {
 
             //check, ORM回報失敗(聚合物件ok為0, 或逐筆陣列任一筆ok為0)不得當成功: 於此表停止, 之後之表不寫入; 此表已被ORM寫入之筆與先前之表無從回復
             if (isOrmFail(r)) {
-                console.log(`${v.name}.insert fail`, r)
-                throw new Error(getMsgFail(v.name, r, v.data, written))
+                //先組出Error訊息再交診斷輸出, 使用端之紀錄函式原地改動r不致改變訊息; 組訊息拋錯者(如r含循環而JSON序列化失敗)仍先輸出診斷再拋出同一錯誤(同舊版次序)
+                let msg = null
+                let threw = false
+                let errMsg = null
+                try {
+                    msg = getMsgFail(v.name, r, v.data, written)
+                }
+                catch (e) {
+                    threw = true //以旗標而非哨兵值判斷: 可拋出任何值(含null、undefined)
+                    errMsg = e
+                }
+                diag(`${v.name}.insert fail`, getBriefResult(r), () => cpDetail(r))
+                if (threw) {
+                    throw errMsg
+                }
+                throw new Error(msg)
             }
 
             written.push(v.name)

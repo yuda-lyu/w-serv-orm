@@ -357,12 +357,12 @@ describe('mapOrm之log標籤與訊息', function() {
         assert.strict.deepEqual(logs.map((v) => v[0]), ['tests.adjustData catch', 'tests.adjustData catch', 'tests.adjustData catch'])
     })
 
-    it('T01 失敗筆主鍵超過100字元時訊息內截斷且log保留全文', async function() {
-        //R7: 截為100字元(含「…」), 恰為100字元者不截斷
+    it('T01 失敗筆主鍵超過100字元時訊息內截斷且log保留全文(opt.logDetail為true時, R-DIAG-01)', async function() {
+        //R7: 截為100字元(含「…」), 恰為100字元者不截斷; 診斷輸出預設不含主鍵, 全文在細節(logDetail為true時進console)
         let id150 = 'k'.repeat(150)
         let id100 = 'm'.repeat(100)
         let save = (d) => d.map(() => ({ n: 1, ok: 0, err: 'E' }))
-        let A = WServOrm(dsAll, mkWOrm('A', [], { save }), 'url-a', 'db-a')
+        let A = WServOrm(dsAll, mkWOrm('A', [], { save }), 'url-a', 'db-a', { logDetail: true })
         let err1 = null
         let err2 = null
         let logs = await captureLog(async () => {
@@ -444,11 +444,11 @@ describe('procOrm補主鍵', function() {
         assert.ok(input.every((v) => !('id' in v)))
     })
 
-    it('P06 逐筆失敗之訊息以呼叫端視角列出且log含補出之主鍵', async function() {
-        //X2: 呼叫端未帶主鍵者仍列第N筆, log保留補出之主鍵
+    it('P06 逐筆失敗之訊息以呼叫端視角列出且log含補出之主鍵(opt.logDetail為true時, R-DIAG-01)', async function() {
+        //X2: 呼叫端未帶主鍵者仍列第N筆, log保留補出之主鍵; 診斷輸出預設不含主鍵, 此處以logDetail為true取得
         let log = []
         let save = (d) => d.map((v, k) => (k === 1 ? { n: 1, ok: 0, err: 'E' } : { n: 1, ok: 1 }))
-        let A = WServOrm(dsAll, mkWOrm('A', log, { save }), 'url-a', 'db-a')
+        let A = WServOrm(dsAll, mkWOrm('A', log, { save }), 'url-a', 'db-a', { logDetail: true })
         let err = null
         let logs = await captureLog(async () => {
             err = await getReject(A.procOrm('u1', 'tests', 'save', [{ id: 's1' }, { name: 'no-id' }]))

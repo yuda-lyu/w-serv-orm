@@ -120,3 +120,23 @@
 - **mustExist 的次序**: `hasNoHit` 只認 `ok !== 0` 者,聚合 `ok:0` 若不先攔會被當成「沒命中」以外的別的路徑;在事後偵測之前先判 `isOrmFail`,使違約回 `failed to save data`/`failed to delete data` 而非誤報 `rowNotFound`(U24d 鎖定).
 - **外部站點只記不改**: w-data-collector 的 `funTestAndSave` 在其套件內呼叫 save,只做陣列檢查;本套件不得改他套件,也不宜用 Proxy 包 woItems 去補(繞道),列入帳本 E2 與 state 之外部缺口,交主控決定是否通報.
 - **更名謂詞時的連帶**: `isInsertFail` 從 run03 起存在,run05 泛用後更名 `isOrmFail`: 檔、測試檔(`unit-isInsertFail` → `unit-isOrmFail`)、帳本與 state 之引用、變異腳本之 find 字串都要同步;舊名只留在歷史經驗與決策紀錄中.
+
+## orm-run01(2026-10-28 派工,新 session): 診斷輸出不得含資料值(R-DIAG-01)
+
+規則見 `rulebook_diag.md` R-DIAG-01(含 72 站全集).以下只記往後會再用到的經驗.
+
+- **「console 診斷」要整個 `src/` 盤,不只建議書列的行**: 建議書只列 `getMapOrm.mjs` 之 8 站,實盤 72 站,其中 `getSettings.mjs` 傾印整份設定(含 `dbPassword`)、`genTestData` 預設印整批資料列、`getDb` 之 `console.log(err)` 印含 ORM 回傳原文之 Error,皆同型.盤法: 逐行去註解後依檔計次(`unit-diaglog` S01),新增站點即失敗而被迫歸類;計次比行號穩.
+- **單一出口 `diag(label, safe, getDetail)`**: 每個站點同時給「安全摘要」與「完整細節(thunk)」,預設輸出摘要、`logDetail` 輸出細節、`funLog` 收三者.細節用 thunk 是因為快照(`snapSafe`)與 `e.toString()` 只有在有消費者時才該計算.摘要與細節在站點旁成對寫,審查時一眼可核對「預設不含 id」.
+- **摘要的錯誤類別用白名單樣式,不信任 `name`/`code` 的內容**: `err.name` 是使用端可改的字串,`code` 可能夾帶主鍵;類別名稱 `^[A-Za-z][A-Za-z0-9_]{0,39}$`、代碼 `^[A-Z0-9_]{1,40}$`、數字限有限數.驅動程式錯誤常以原型上的存取器宣告 `name`(MongoServerError),只讀資料屬性會讀不到,故先取建構子名稱再取 `name`.全程用 `util.types` 與屬性描述子,Proxy 與 getter 不執行(O07).
+- **斷言失敗時的格式化也要小心**: 變異 M02 令摘要誤含原錯誤物件(含 Proxy),`assert.deepStrictEqual` 失敗時格式化差異會觸發 Proxy 陷阱,mocha 行程以離開碼 0 靜默結束,變異腳本讀不到「N failing」而誤判存活.測試對「可能含不可信物件」的實得值,先轉為純資料(`JSON.parse(JSON.stringify())` 包 try)再比對;變異腳本對讀不到統計者要印尾端輸出,不要預設 0 紅.`spawnSync` 要加大 `maxBuffer`.
+- **舊測試把「原文進 log」當預設**: U19d、U22、N11、T01、P06、D07b 等 7 案隨預設改變而紅,不是放寬而是規格改變: 改以 `logDetail: true` 取得舊輸出並保留「reject 不含原文」之斷言,另以新測試鎖預設.`unit-objcopy` 以 `getKinds()` 單點改為 `logDetail: true`,因其 D07/D07b/C03/S14 驗證的正是「快照輸出不執行使用端程式」,預設不輸出快照時這些案會空轉通過.
+- **修前紅用 HEAD 副本跑最終測試**: `git archive HEAD src schema package.json` 與 `test/tools` 解到 `tmp/orm-run01/head/`,把最終的新測試檔複製進去,以 `node <repo>/node_modules/mocha/bin/mocha.js` 在該夾跑(不要 `npx`,該夾有 package.json 會嘗試另裝);比「先寫測試再跑舊碼」可靠,因為測試後來又改過(如 P24 的 `<b>` 實際不會被 clearXSS 改寫,首次紅是錯的原因).
+- **真實 stdout 要用子行程驗**: 單元測試以替換 `console.log` 擷取,驗不到「行程標準輸出」;`api-diaglog` 以子行程實跑真 w-orm-lowdb(外包一層只讓特定 id 失敗),父行程檢查子行程之 stdout/stderr 位元組,並以 `logDetail` 為正對照.
+- **工具路徑的選項型別慣例與建構路徑不同**: `getDb`、`genTestData`、`getSettings` 之 `bLog` 型別錯誤是忽略並用預設,故 `logDetail`/`funLog` 在這些處同樣忽略(`getOptLogLoose`);`WServOrm` 建構是拋 `Error`(`getOptLog`).兩者預設值皆為安全輸出,忽略不致洩漏.
+- **外審 terra 第一輪找出 18 項,核實後修了 15 項**(報告留在任務資料夾 `agent-out/orm-run01-evidence/04-review-terra-round1.md`): 我自審時判「不需改」的 18 站(無效參數值、表名、路徑、固定 Error)被指出 `funLog` 給定時仍有直接 console 且傳入值可含帳密,最後改為 72 站全數經 diag,不變式簡化為「除 diag 本體外 `src/` 無 console」,比「逐站分類」好守.教訓: 「這個輸出只是設定值/路徑/固定句,不含資料」的判斷最容易漏,因為值是呼叫端給的.派外審時提示詞要寫明驗收條件與讀檔法、副本內字樣中性化(「注入」「繞過」等改寫),terra max 約 8 分鐘讀完整個套件.
+- **診斷輸出的五個「不得影響結果」陷阱**(皆由外審發現,各有測試): (1) 交給 logger 的物件若與組 reject 訊息共用,原地遮罩會改變 reject → 交拷貝、先組訊息再輸出; (2) `e.toString()` 由立即求值改延後求值,會讓拋出 null 之類的邊界從 `failed to process input` 變成 `failed to adjust data` → 維持立即求值; (3) 摘要再讀一次 `ok`、`length` 等屬性,getter 可前後不同或拋錯 → 摘要不重讀、只用描述子與固定常數; (4) 原生 promise 的 `then` 屬性可被覆寫成拋錯的 getter → 用 `Promise.prototype.then.call`; (5) 建構選項讀兩次,getter 可前後不同 → 讀一次、傳固定快照.
+- **斷言失敗時格式化實得值也可能拋錯而讓測試行程靜默結束(離開碼 0)**: 實得值含 Proxy 或帶 throwing getter 的物件時(變異使摘要誤含原物件),`assert.deepStrictEqual` 的差異格式化會觸發陷阱.凡實得值可能含不可信物件,先 `JSON.parse(JSON.stringify())` 轉純資料再比對;變異腳本對讀不到統計者標「未判定」不得當作存活或殺死.
+- **以 HEAD 實跑確認路徑表的預期值是舊版行為**: 把最終測試複製進 `tmp/orm-run01/head/test/`,補一份 `getDiag.mjs` 讓 import 通過,只跑契約類案(`--grep "C01|C02|O11"`)在 HEAD 全綠,即證明「reject 預期值=舊版行為」,這是契約不變的獨立預言機(C01 本身只比新版各選項,不夠).
+- **「拷貝細節」越做越深是陷阱,改成「只用內建操作 + 標記」才收斂**: 外審第二至四輪對 `cpDetail` 逐輪找出 Date 實例方法、`stack` 存取器、Buffer 共用/型別轉換、`structuredClone` 對 SharedArrayBuffer 視圖與小視圖大緩衝區、RegExp 自有 getter、寬/稀疏陣列、非索引鍵等邊界.根因是我試圖「複製所有東西並保真」.最後的政策: 只複製純物件/類別實例/陣列/Error/Date/Map/Set(全用內建方法),其餘(函數、Proxy、RegExp、二進位、Promise…)一律標記字串,存取器以 `[Getter/Setter]` 保留鍵,預算同時計節點與鍵.logDetail 因而對這些值輸出標記而非原值——這是明示的取捨,比保真但有洞好.往後遇到「要把使用端物件交給外部函式又不能被改動」,先決定哪些型別值得保真,其餘標記.
+- **外審不會自己收斂**: 四輪各 18/15/7/6 項,後兩輪幾乎都是對「前一輪新寫的防護」的邊界.收斂靠主責決策(縮小範圍、寫入已知限制、說明哪些修正未再送審),不是靠等審查者說通過.每輪回覆前先分類: 屬實且影響預設行為/契約(修)、屬實但病態構造(修或列限制)、與驗收條件衝突(不採納並寫理由).
+- **同系列只讀調查的結論(未改檔)**: 7 個 `w-orm-*` 與 `w-serv-webdata` 之 `src/` 無 A 類(資料列、主鍵)站點;各 ORM 的 `emitChange`/`emitError` catch 內 `console.log(例外)` 印使用端訂閱函數拋出的例外,屬弱 B 類;`w-orm-reladb` `WOrmReladb.mjs:558` 重複輸出 `importModels` 失敗結果.`w-serv-webdata` 把 procOrm 的 reject 值原樣回給前端(文件載明之設計),故 procOrm 的 reject 訊息(逐筆失敗列主鍵,R-MSG-01)仍會到前端——本輪不動(契約).

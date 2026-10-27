@@ -17,4 +17,5 @@
 | 使用端物件之迭代與複製 | `rulebook_obj.md` | R-OBJ-01 |
 | 擴充函數、授權、實例、備份還原與相容 | `rulebook_runtime.md` | R-HOOK-01、R-AUTH-01、R-INST-01、R-DB-01、R-COMPAT-01 |
 | 破壞性變更紀錄、其他已知限制與 delAll 使用須知 | `rulebook_changes.md` | 破壞性變更紀錄、其他已知限制、〔delAll 使用須知(使用者裁示)〕 |
+| 診斷輸出(console)不得含資料值(2026-10-28 orm-run01 新增) | `rulebook_diag.md` | R-DIAG-01(預設只輸出標籤與摘要;`opt.logDetail`、`opt.funLog`;站點全集 72 站;盤點以 `test/unit-diaglog.test.mjs` S01 鎖定) |
 | 多人同時編輯之寫入共用核心(2026-10-22 第 110 項 run01 新增) | `rulebook_concurrency.md` | R-BASELINE-01、R-LOCK-01、R-GUARD-01、R-ONLYMOD-01、R-KEEPUSER-01(2026-10-23 run02 新增) |

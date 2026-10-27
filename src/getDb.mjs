@@ -3,6 +3,7 @@ import fs from 'fs'
 import get from 'lodash-es/get.js'
 import each from 'lodash-es/each.js'
 import keys from 'lodash-es/keys.js'
+import size from 'lodash-es/size.js'
 import iseobj from 'wsemi/src/iseobj.mjs'
 import isbol from 'wsemi/src/isbol.mjs'
 import isestr from 'wsemi/src/isestr.mjs'
@@ -11,12 +12,14 @@ import o2j from 'wsemi/src/o2j.mjs'
 import now2strp from 'wsemi/src/now2strp.mjs'
 import haskey from 'wsemi/src/haskey.mjs'
 import br from './getDbBackupAndRecover.mjs'
+import { getOptLogLoose, getDiag, getBriefErr, cpDetail } from './getDiag.mjs'
 
 
 let fdSrv = path.resolve()
 
 
-function genModels(ds, genModelsByTabs, opt = {}) {
+function genModels(ds, genModelsByTabs, opt = {}, optLog = undefined) {
+    //optLog(選用, 內部): 由recover帶入之診斷選項快照, 不再讀取使用端之opt(其getter可能前後不同); 未給者由opt取(R-DIAG-01)
 
     //fdModels
     let fdModels = get(opt, 'fdModels')
@@ -30,6 +33,9 @@ function genModels(ds, genModelsByTabs, opt = {}) {
         bLog = true
     }
 
+    //diag, 同backup(R-DIAG-01)
+    let diag = getDiag(optLog === undefined ? getOptLogLoose(opt) : optLog)
+
     //names
     let names = keys(ds)
 
@@ -39,13 +45,13 @@ function genModels(ds, genModelsByTabs, opt = {}) {
 
         //check
         if (!haskey(ds[name], 'settings')) {
-            console.log(`table[${name}] has no settings`)
+            diag(`table[${name}] has no settings`)
             return true //跳出換下一個
         }
 
         //check
         if (!iseobj(ds[name].settings)) {
-            console.log(`invalid ds[${name}].settings`)
+            diag(`invalid ds[${name}].settings`)
             return true //跳出換下一個
         }
 
@@ -54,7 +60,7 @@ function genModels(ds, genModelsByTabs, opt = {}) {
 
     })
     if (bLog) {
-        console.log('tabs', tabs)
+        diag('tabs', { n: size(tabs), tables: keys(tabs) }, () => cpDetail(tabs)) //預設只列表名, 完整schema設定(可含預設值等)為細節; 交出拷貝, 使用端原地改動不影響其後傳給模型產生器之tabs
     }
 
     //fd
@@ -75,8 +81,12 @@ async function backup(woItems, opt = {}) {
         bLog = true
     }
 
+    //diag, 失敗時之診斷輸出預設只列錯誤類別(原文含ORM回傳, 為細節), opt.logDetail為true還原完整輸出, opt.funLog收完整細節(R-DIAG-01); 型別錯誤者忽略, 同bLog
+    let optLog = getOptLogLoose(opt)
+    let diag = getDiag(optLog)
+
     //backup
-    await br.backup(woItems)
+    await br.backup(woItems, optLog)
         .then((res) => {
 
             //o2j
@@ -97,11 +107,11 @@ async function backup(woItems, opt = {}) {
             fs.writeFileSync(fp, j, 'utf8')
 
             if (bLog) {
-                console.log('backup finish')
+                diag('backup finish')
             }
         })
         .catch((err) => {
-            console.log(err)
+            diag('backup catch', getBriefErr(err), () => cpDetail(err), true) //舊版為console.log(err); 交出拷貝, 使用端原地遮罩不改變拋給呼叫端之原錯誤
             throw err
         })
 
@@ -124,6 +134,10 @@ async function recover(woItems, fp, opt = {}) {
         bLog = true
     }
 
+    //optLog, diag, 同backup(R-DIAG-01)
+    let optLog = getOptLogLoose(opt)
+    let diag = getDiag(optLog)
+
     //funGenModels and bNeedCreateStorage, 若為關聯資料庫則需使用genModels與needCreateStorage=true
     //genModels須以ds與genModelsByTabs產生model, 低階recover則以無參數呼叫, 故以閉包帶入; 缺則於任何寫入之前reject
     let funGenModels = null
@@ -133,24 +147,24 @@ async function recover(woItems, fp, opt = {}) {
         let genModelsByTabs = get(opt, 'genModelsByTabs')
         if (!iseobj(ds) || !isfun(genModelsByTabs)) {
             let err = new Error('bRela needs opt.ds and opt.genModelsByTabs')
-            console.log(err)
+            diag('recover catch', getBriefErr(err), () => cpDetail(err), true) //舊版為console.log(err)
             return Promise.reject(err)
         }
         funGenModels = () => {
-            genModels(ds, genModelsByTabs, opt)
+            genModels(ds, genModelsByTabs, opt, optLog)
         }
         bNeedCreateStorage = true
     }
 
     //recover
-    await br.recover(fp, woItems, funGenModels, bNeedCreateStorage)
+    await br.recover(fp, woItems, funGenModels, bNeedCreateStorage, optLog)
         .then(() => {
             if (bLog) {
-                console.log('recover finish')
+                diag('recover finish')
             }
         })
         .catch((err) => {
-            console.log(err)
+            diag('recover catch', getBriefErr(err), () => cpDetail(err), true) //舊版為console.log(err)
             throw err
         })
 
