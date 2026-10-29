@@ -45,13 +45,14 @@
     
     <section>
         <article>
-            <pre class="prettyprint source linenums"><code>import pmSeries from 'wsemi/src/pmSeries.mjs'
+            <pre class="prettyprint source linenums"><code>import get from 'lodash-es/get.js'
+import pmSeries from 'wsemi/src/pmSeries.mjs'
 import pmKeyMutex from 'wsemi/src/pmKeyMutex.mjs'
 import isfun from 'wsemi/src/isfun.mjs'
 import checkOptRemoved from './checkOptRemoved.mjs'
 import { checkContract, compareBaseline } from './baseline.mjs'
 import getDbBackupAndRecover from './getDbBackupAndRecover.mjs'
-import { getOptLog } from './getDiag.mjs'
+import { genDiag, getUrlSecrets } from './getDiagBrief.mjs'
 import getWoItems from './getWoItems.mjs'
 import getMapOrm from './getMapOrm.mjs'
 import getProc from './getProc.mjs'
@@ -71,6 +72,21 @@ function getTabsLock(woItems, tableNames, fn) {
         throw new Error('invalid fn of withTabLocks, need a function')
     }
     return [...new Set(tableNames)].sort() //預設排序為UTF-16碼元序, 不用localeCompare
+}
+
+
+function getOptLog(opt) {
+    //診斷輸出的設定(R-DIAG-01)之型別檢核, 供WServOrm建構時使用: 型別錯誤即拋Error, 與建構期其他設定(checkOptRemoved、addFun*)一致; undefined與null視為未給(同checkOptRemoved)
+    //各讀一次並回傳固定快照{ logDetail, funLog }, 交wsemi之getDiag(其後各路徑共用同一個diag, 不再讀取使用端的opt, getter可能前後不同)
+    let logDetail = get(opt, 'logDetail')
+    if (logDetail !== undefined &amp;&amp; logDetail !== null &amp;&amp; typeof logDetail !== 'boolean') {
+        throw new Error('invalid opt.logDetail, need a boolean')
+    }
+    let funLog = get(opt, 'funLog')
+    if (funLog !== undefined &amp;&amp; funLog !== null &amp;&amp; typeof funLog !== 'function') {
+        throw new Error('invalid opt.funLog, need a function')
+    }
+    return { logDetail: logDetail === true, funLog: typeof funLog === 'function' ? funLog : null }
 }
 
 
@@ -122,9 +138,15 @@ function mkErrBaseline(c) {
  * 呼叫契約：check以reject或拋錯阻擋，回傳值不影響結果，且早於前處理執行；前處理逐一呼叫，各收新建之參數物件{woName,userId,mode,input}，input為前一個回傳之input，回傳須為含input之物件否則reject；後處理逐一呼叫，各收新建之參數物件且其output為前一個之回傳值，最後之回傳值即為procOrm之回傳值。
  * 後處理只在check、前處理與ORM操作皆成功後執行，逐筆失敗(含del)或mix部分寫入後reject者皆不執行；後處理自身亦可reject。後處理之input為前處理後之數據(無前處理者即呼叫端傳入之數據)，不含本套件之補值與主鍵轉型，主鍵見output。
  * 如需觀察ORM實際寫入，可另監聽woItems內各ORM之change與error事件；惟事件由ORM發出，不含userId，mix會依步驟分次發出，經woItems直接寫入者亦會發出，insert之結果為聚合計數而非逐筆。
- * 錯誤型別：procOrm由本套件產生之reject一律為英文訊息字串(供前端顯示或對應多語系；ORM之錯誤原文只在診斷輸出之細節而不轉出；檢查與轉型階段之非預期例外，如使用端物件之Proxy陷阱拋錯、遞迴爆堆疊，統一為'failed to process input')，擴充函數自身之reject或拋錯則原樣轉出；建構(設定或ORM無效)、擴充函數註冊、backup與recover由本套件產生之錯誤一律為Error，ORM之錯誤則原樣轉出。
+ * 錯誤型別：procOrm由本套件產生之reject一律為英文訊息字串(供前端顯示或對應多語系；ORM之錯誤原文只在診斷輸出之細節而不轉出；檢查與轉型階段之非預期例外，如使用端物件之Proxy陷阱拋錯、遞迴爆堆疊，統一為'failed to process input')，擴充函數自身之reject或拋錯則轉出其值(含本實例連線憑證者為遮罩後之副本，見下述對外錯誤值)；建構(設定或ORM無效)、擴充函數註冊、backup與recover由本套件產生之錯誤一律為Error，ORM之錯誤則轉出其值(同擴充函數)。
  *
- * 診斷輸出(規則帳本R-DIAG-01)：寫入失敗、輸入被拒等情形本套件會輸出一行診斷，行程標準輸出常被pm2或容器log收集而主鍵可能是使用者識別，故預設不輸出主鍵、資料值與ORM錯誤原文，只輸出標籤(含表名與操作，如'users.save fail')與不含個資之摘要：逐筆失敗為{ n: 失敗筆數, ks: [前10筆之位置] }，ORM回聚合物件而ok為0者為{ ok: 0 }，ORM或後端reject或拋錯為{ errType: 建構子名稱, errCode?: 機器代碼 }(字串reject為{ errType: 'string' }，不列訊息文字；errCode只放行ENOENT類、ERR_開頭、SQLSTATE 5碼與絕對值至99999之整數)，被拒之條件為{ reason: 固定拒收句 }，呼叫端傳入之無效參數(ds、WOrm、url、db、woItems、fp)為{ type: 型別名稱 }。src內所有診斷輸出(含進度、完成訊息與無效參數)都經同一出口，除該出口外沒有直接之console呼叫。procOrm之resolve與reject內容與時機不因此改變(逐筆失敗之reject訊息列主鍵與recover、genTestData拋出之Error訊息屬回傳契約，不受影響)。opt.logDetail(布林，預設false)為true時console還原為含主鍵與錯誤原文之完整細節(供除錯)；opt.funLog(label, safe, detail)為使用端提供之紀錄函式，給予時診斷輸出只交給它而不寫console，label為標籤、safe為上述摘要(無則undefined)、detail為完整細節(含主鍵與錯誤原文，無則不傳；與其後流程共用之細節〔失敗清單、拋給呼叫端之Error、傳給模型產生器之schema等〕為深層拷貝，使用端原地遮罩不影響結果，超過深度8或節點5000者以標記字串代替)，供使用端遮罩或轉送，funLog同步拋錯或回傳rejected promise或thenable皆被吞下而不影響procOrm(刻意構造之惡意promise不在保證內)；funLog優先於logDetail。型別錯誤(logDetail非布林、funLog非函數；undefined與null視為未給)於建構時拋Error，早於建立各資料表ORM；選項只讀取一次。各實例各自持有設定。實例上之backup與recover(參數不變，各實例之函數身分不同)之診斷輸出依本實例之設定，getDb之backup與recover、genTestData、getSettings則依其各自opt之同名選項(型別錯誤者忽略並用預設，同其bLog)。建議會把標準輸出交給pm2或容器收集之服務(如w-web-*)以opt.funLog接管。
+ * 對外錯誤值(規則帳本R-DIAG-01，跨套件規格〈診斷輸出與遮罩〉D3)：外來值(ORM之錯誤含建構與close、檔案系統、擴充函數、recover之模型產生器、genTestData之funTest等使用端回呼拋出或reject之值)於本套件之catch站點經wsemi之diag.err，
+ * 含本實例連線憑證(url之整串、密碼、帳:密、查詢參數之秘密值等)、網址帳密或憑證鍵值對者轉出同類別之副本(instanceof與自有屬性保留，憑證為***，原物件不改動)，無須處理者轉出原物件(身分不變)；只遮憑證，單獨帳號、儲存路徑與主鍵等識別值不遮。
+ * 本套件以固定詞彙組成之reject與throw(procOrm之固定字串、逐筆失敗之主鍵訊息、rowNotFound、守門函數之訊息等)一律原樣，不經遮罩；recover與genTestData之失敗訊息只對其中ORM回傳原文之段經diag.mask。withTabLocks之fn與guardWrite之read、write之reject原樣轉出(多為procOrm之固定詞彙，供getRejectKey判讀)。
+ *
+ * 診斷輸出(規則帳本R-DIAG-01)：寫入失敗、輸入被拒等情形本套件會輸出一行診斷，行程標準輸出常被pm2或容器log收集而主鍵可能是使用者識別，故預設不輸出主鍵、資料值與ORM錯誤原文，只輸出標籤(含表名與操作，如'users.save fail')與不含個資之摘要：逐筆失敗為{ n: 失敗筆數, ks: [前10筆之位置] }，ORM回聚合物件而ok為0者為{ ok: 0 }，ORM或後端reject或拋錯為wsemi之getDiagBriefErr之{ errType, errCode? }(errType只列內建錯誤類別名，其餘為'Error'，字串reject為'string'；errCode只收wsemi明列之代碼集合，本套件宣告sqlstate、sqlite、mysql、mssql、mongo、mongoServer、lmdb、level並讀巢狀之original、parent)，被拒之條件為{ reason: 固定拒收句 }，呼叫端傳入之無效參數(ds、WOrm、url、db、woItems、fp)為{ type: 型別名稱 }，進度為{ table: 表名 }。
+ * 出口、遮罩、細節拷貝與錯誤摘要一律由wsemi之getDiag系列處理(wsemi規則帳本R-DIAG-01；選項與細節之完整規則以wsemi各函數之JSDoc為準)，本套件只宣告秘密來源(本實例之url：連線字串之帳密，或檔案位置之儲存路徑)、代碼集合與safe之鍵(src/getDiagBrief.mjs)；src內沒有直接之console呼叫，全部站點寫console.log。procOrm之resolve與reject內容與時機不因診斷選項改變(逐筆失敗之reject訊息列主鍵屬回傳契約)。
+ * opt.logDetail(布林，預設false)為true時console輸出console.log(標籤, 細節)，細節含主鍵與錯誤原文、連線憑證已遮罩(供除錯)；opt.funLog(label, safe, detail)為使用端提供之紀錄函式，給予時診斷輸出只交給它而不寫console，label為標籤、safe為上述摘要(無則undefined)、detail為細節(無則不傳)，細節一律為wsemi之maskDiagCopy之遮罩拷貝(不交出原參照、不沿用使用端原型、有界)，使用端原地改動不影響結果；funLog帶noDetail===true者(wsemi之genDiagFunLog所產生者)只收(label, safe)；funLog同步拋錯或回傳rejected promise皆被吞下而不影響procOrm；funLog優先於logDetail。型別錯誤(logDetail非布林、funLog非函數；undefined與null視為未給)於建構時拋Error，早於建立各資料表ORM；選項只讀取一次。各實例各自持有設定。實例上之backup與recover(參數不變，各實例之函數身分不同)之診斷輸出依本實例之設定，getDb之backup與recover、genTestData、getSettings則依其各自opt之同名選項(型別錯誤者忽略並用預設，同其bLog)。建議會把標準輸出交給pm2或容器收集之服務(如w-web-*)以opt.funLog接管。
  *
  * 授權：procOrm不做授權，不檢查使用者，亦不依使用者過濾數據；userId只供寫入稽核欄位(userId、userIdUpdate)與交給擴充函數。procOrm開放給前端時(如讓前端經資料通道直接操作資料表)，須由開放處負責授權；addFunCheck可掛額外檢查，惟伺服端程式之呼叫亦會經過。
  * 已移除之設定：useCheckUser、getUserById、useExcludeWhenNotAdmin，未給、null或false者照常建構，給予其他值即於建構時拋錯。
@@ -136,7 +158,7 @@ function mkErrBaseline(c) {
  * @param {String} url 輸入資料庫連線位址字串
  * @param {String} db 輸入資料庫名稱字串
  * @param {Object} [opt={}] 輸入設定物件，預設{}；已移除之設定見上述
- * @param {Boolean} [opt.logDetail=false] 輸入診斷輸出是否還原為含主鍵與錯誤原文之完整細節，預設false(只輸出不含個資之摘要)，見上述診斷輸出
+ * @param {Boolean} [opt.logDetail=false] 輸入診斷輸出是否輸出含主鍵與錯誤原文之細節(連線憑證已遮罩)，預設false(只輸出不含個資之摘要)，見上述診斷輸出
  * @param {Function} [opt.funLog] 輸入使用端提供之紀錄函式(label, safe, detail)，預設無；給予時診斷輸出只交給它而不寫console，見上述診斷輸出
  * @returns {Object} 回傳伺服器ORM支援物件，含woItems(各資料表ORM實例)、procOrm(資料操作函數，輸入為userId、woName、mode、input，及選用之opt)、withTabLocks(tableNames, fn)與guardWrite({ tables, read, baseline, contract, write })(見上述多人同時編輯之寫入契約)、addFunCheck、addFunPreProcessing、addFunPostProcessing、closeAll(逐一關閉各資料表ORM之連線)，以及backup(woItems)與recover(fp, woItems, genModels, needCreateStorage)；後兩者不綁定本實例，須自行傳入woItems(須為非空物件，否則reject)，其參數順序與getDb之recover(woItems, fp, opt)不同；recover於寫入前驗證備份內容(須為非空陣列且各筆之name為woItems內之資料表)，失敗時reject，逐表寫入時中途失敗則先前之表已寫入
  * @example
@@ -202,25 +224,34 @@ function WServOrm(ds, WOrm, url, db, opt = {}) {
     //optLog, 診斷輸出之設定(opt.logDetail、opt.funLog, R-DIAG-01), 型別錯誤即拋Error, 同樣須於建立各資料表ORM之前
     let optLog = getOptLog(opt)
 
+    //diag, 本實例之診斷出口(wsemi之getDiag, 交固定快照optLog); 秘密為連線位址(連線字串之帳密, 或檔案位置之儲存路徑), 各路徑(建構、procOrm、backup、recover、closeAll)共用
+    let diag = genDiag(optLog, getUrlSecrets(url))
+
     //getWoItems
-    let woItems = getWoItems(ds, WOrm, url, db, optLog)
+    let woItems = getWoItems(ds, WOrm, url, db, diag)
     // console.log('woItems', woItems)
 
-    //getMapOrm, 交固定快照optLog, 不再讀取使用端之opt(其getter可能前後不同)
-    let mapOrm = getMapOrm(ds, woItems, optLog)
+    //getMapOrm, 交本實例之diag
+    let mapOrm = getMapOrm(ds, woItems, undefined, diag)
     // console.log('mapOrm', mapOrm)
 
-    //getProc
-    let proc = getProc(mapOrm, opt)
+    //getProc, 交本實例之diag(擴充函數之reject經diag.err)
+    let proc = getProc(mapOrm, opt, diag)
     // console.log('proc', proc)
 
     //closeAll, 逐一關閉woItems內各資料表ORM實例之連線(env), 釋放檔案鎖, 供測試隔離或優雅關機使用
+    //ORM之close拋出或reject之值為外來值, 經diag.err移除本實例之連線憑證後轉出(R-DIAG-01)
     let closeAll = async () => {
-        await pmSeries(woItems, async (wo) => {
-            if (wo &amp;&amp; isfun(wo.close)) { //ORM未實作close時(如lowdb)自動略過
-                await wo.close()
-            }
-        })
+        try {
+            await pmSeries(woItems, async (wo) => {
+                if (wo &amp;&amp; isfun(wo.close)) { //ORM未實作close時(如lowdb)自動略過
+                    await wo.close()
+                }
+            })
+        }
+        catch (err) {
+            throw diag.err(err)
+        }
     }
 
     //kmx, 每實例一個鎖管理器(每表一鍵), 同表之寫入者須共用(R-LOCK-01)
@@ -275,12 +306,12 @@ function WServOrm(ds, WOrm, url, db, opt = {}) {
         })
     }
 
-    //backup, recover, 參數不變(不綁定本實例, 須自行傳入woItems), 僅令其診斷輸出(進度、無效參數、逐表insert失敗之ORM回傳)依本實例之opt.logDetail與opt.funLog(R-DIAG-01)
+    //backup, recover, 參數不變(不綁定本實例, 須自行傳入woItems), 僅令其診斷輸出(進度、無效參數、逐表insert失敗之ORM回傳)與對外錯誤值之遮罩依本實例之diag(R-DIAG-01)
     //以async箭頭函數包裝並保留預設參數位置, 使AsyncFunction與length(backup 1、recover 3)同原函數; 各實例之函數身分不再相同; 低階函數於建構時固定(同舊版展開時即保存)
     let brBackup = getDbBackupAndRecover.backup
     let brRecover = getDbBackupAndRecover.recover
-    let backup = async (woItemsIn) => brBackup(woItemsIn, optLog)
-    let recover = async (fp, woItemsIn, genModels, needCreateStorage = false) => brRecover(fp, woItemsIn, genModels, needCreateStorage, optLog)
+    let backup = async (woItemsIn) => brBackup(woItemsIn, diag)
+    let recover = async (fp, woItemsIn, genModels, needCreateStorage = false) => brRecover(fp, woItemsIn, genModels, needCreateStorage, diag)
 
     return {
         backup,
@@ -310,7 +341,7 @@ export default WServOrm
 <br class="clear">
 
 <footer>
-    Documentation generated by <a href="https://github.com/jsdoc3/jsdoc">JSDoc 4.0.5</a> on Thu Oct 29 2026 09:47:56 GMT+0800 (台北標準時間) using the <a href="https://github.com/clenemt/docdash">docdash</a> theme.
+    Documentation generated by <a href="https://github.com/jsdoc3/jsdoc">JSDoc 4.0.5</a> on Thu Oct 29 2026 20:35:13 GMT+0800 (台北標準時間) using the <a href="https://github.com/clenemt/docdash">docdash</a> theme.
 </footer>
 
 <script>prettyPrint();</script>
