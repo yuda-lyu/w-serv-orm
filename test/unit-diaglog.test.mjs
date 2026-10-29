@@ -5,6 +5,7 @@ import assert from 'assert'
 import WServOrm from '../src/WServOrm.mjs'
 import getMapOrm from '../src/getMapOrm.mjs'
 import { getDiag, getBriefResult, getOptLogLoose, cpDetail } from '../src/getDiag.mjs'
+import { cpuMsSync } from './tools/cpuBound.mjs'
 
 
 //R-DIAG-01(orm-run01, 來源: w-web-perm 建議書 Gitea #12): procOrm各路徑之診斷輸出預設不含主鍵、資料值與ORM錯誤原文,
@@ -857,17 +858,20 @@ describe('診斷選項之建構與行為(R-DIAG-01)', function() {
 
     it('O14f cpDetail: 寬陣列、稀疏陣列、大物件之處理量有上限; 陣列自有非索引鍵保留; 空洞與長度保留', function() {
         //R-DIAG-01(外審 terra R3-03、R3-04): 診斷不得因細節巨大而卡住或耗盡記憶體
-        let t0 = Date.now()
-        let sparse = cpDetail(new Array(2 ** 32 - 1))
+        //[P6 效能時限] 處理量有界: 以CPU時間斷言, 裕度5000 CPU毫秒(見test/tools/cpuBound.mjs)
+        let { r: [sparse, wide, detailObj], cpu } = cpuMsSync(() => {
+            let sparse = cpDetail(new Array(2 ** 32 - 1))
+            let wide = cpDetail(new Array(300000).fill(1))
+            let obj = {}
+            for (let i = 0; i < 20000; i++) {
+                obj[`k${i}`] = i
+            }
+            return [sparse, wide, cpDetail(obj)]
+        }, 'O14f cpDetail')
         assert.strict.equal(sparse.length, 2 ** 32 - 1)
-        let wide = cpDetail(new Array(300000).fill(1))
         assert.ok(Object.keys(wide).length <= 5000, `${Object.keys(wide).length}`)
-        let obj = {}
-        for (let i = 0; i < 20000; i++) {
-            obj[`k${i}`] = i
-        }
-        assert.ok(Object.keys(cpDetail(obj)).length <= 5000)
-        assert.ok(Date.now() - t0 < 5000, '耗時有界')
+        assert.ok(Object.keys(detailObj).length <= 5000)
+        assert.ok(cpu < 5000, `耗時有界, CPU耗時 ${cpu} ms`)
         let arr = [1, , 3] // eslint-disable-line no-sparse-arrays
         arr.reason = 'driver failure'
         let sym = Symbol('s')

@@ -169,6 +169,25 @@ await procOrm('admin-1', 'tokens', 'insert', [{ id: 't1', userId: 'owner-1', nam
 * **前端**：以 `buildBaseline` 對畫面所見之同一快照自算基準；草稿保護(推播時不重建、凍結基準)屬前端；基準經實際傳輸路徑(資料通道或 RPC)後須仍等於伺服端新鮮讀取所算(型別漂移，如數字被傳成字串，會使摘要不同)，各使用端須以其實際傳輸路徑驗證。
 * **同表只由同一 ORM 實例寫入、`read` 不經快取、單一行程**(部署前提)。
 
+## Extension functions and `opt.onTrace`
+`addFunCheck(f, opt)`、`addFunPreProcessing(f, opt)`、`addFunPostProcessing(f, opt)` 註冊之擴充函數屬於各實例，**註冊後約 1 毫秒(以計時器)才生效**，在此之前之 `procOrm` 呼叫不會套用。第 2 參數 `opt` 為選用，`opt.onTrace` 為觀察回調，於該擴充函數**實際生效**之當下同步呼叫一次，使用端(含測試)可據此得知「已生效」，不必等待固定毫秒：
+
+```js
+let so = WServOrm(ds, WOrm, url, db)
+await new Promise((resolve) => {
+    so.addFunPostProcessing(({ output }) => output, {
+        onTrace: (e) => {
+            //e = { type: 'active', hook: 'postProcessing', n: 1 }，已凍結
+            resolve(e)
+        },
+    })
+})
+//此後之 so.procOrm(...) 必定套用該後處理
+```
+* 事件為凍結物件 `{ type: 'active', hook, n }`：`hook` 為 `'check'`、`'preProcessing'` 或 `'postProcessing'`，`n` 為該實例該類擴充函數生效後之總數(`addFunCheck` 註冊非函數時拋錯並令該實例之 `procOrm` 一律 reject，其恆 reject 之守門函數亦計入 `n`)。註冊時即拋錯者(非函數)不通知。
+* 回調同步呼叫、不帶接收者；回調拋錯與回傳之 rejection 一律忽略，不影響註冊與 `procOrm`，回傳值不使用。未給 `opt` 或 `opt.onTrace` 非函數時行為同未支援前。
+* 回調之事件格式由 `wsemi` 之 `getTrace`(`wsemi/src/getTrace.mjs`)統一處理，與其他自有套件之 `opt.onTrace` 一致。
+
 ## Installation
 
 ### Using npm(ES6 module):

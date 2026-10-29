@@ -71,6 +71,7 @@ function mkErrBaseline(c) {
  * (4)純函數子模組src/baseline.mjs(零import，可由瀏覽器端以w-serv-orm/src/baseline.mjs深層匯入)：digestRow、buildBaseline、compareBaseline、checkContract、isBaselineValid、cyrb53、pickWriteRow、getRejectKey，規則見該檔與README；不提供雜湊快取。
  *
  * 擴充函數(addFunCheck、addFunPreProcessing、addFunPostProcessing)屬於各實例，重建實例後須重新註冊；註冊時須傳入函數，否則立即拋錯(addFunCheck另令該實例之procOrm一律reject)；註冊後約1毫秒(以計時器)才生效，在此之前之procOrm呼叫不會套用。
+ * 三個函數皆可給選用之第2參數opt(addFunCheck(f, opt)、addFunPreProcessing(f, opt)、addFunPostProcessing(f, opt))，opt.onTrace為觀察回調(e)=>{}，於該擴充函數實際生效(已加入該實例)之當下同步呼叫一次，e為凍結之事件物件{ type: 'active', hook, n }：hook為'check'、'preProcessing'或'postProcessing'，n為該實例該類擴充函數生效後之總數(addFunCheck註冊非函數時拋錯並令該實例之procOrm一律reject，其恆reject之守門函數亦計入n)。使用端可據此得知「已生效」而不必等待固定毫秒；註冊時即拋錯者(非函數)不通知。回調同步呼叫、不帶接收者，其拋錯與回傳之rejection一律忽略、不影響註冊與procOrm，回傳值不使用；未給或非函數時行為同未支援前(單一參數呼叫、被Array.prototype.forEach等多帶參數呼叫者亦同)。
  * 呼叫契約：check以reject或拋錯阻擋，回傳值不影響結果，且早於前處理執行；前處理逐一呼叫，各收新建之參數物件{woName,userId,mode,input}，input為前一個回傳之input，回傳須為含input之物件否則reject；後處理逐一呼叫，各收新建之參數物件且其output為前一個之回傳值，最後之回傳值即為procOrm之回傳值。
  * 後處理只在check、前處理與ORM操作皆成功後執行，逐筆失敗(含del)或mix部分寫入後reject者皆不執行；後處理自身亦可reject。後處理之input為前處理後之數據(無前處理者即呼叫端傳入之數據)，不含本套件之補值與主鍵轉型，主鍵見output。
  * 如需觀察ORM實際寫入，可另監聽woItems內各ORM之change與error事件；惟事件由ORM發出，不含userId，mix會依步驟分次發出，經woItems直接寫入者亦會發出，insert之結果為聚合計數而非逐筆。

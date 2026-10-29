@@ -3,6 +3,7 @@ import WServOrm from '../src/WServOrm.mjs'
 import getMapOrm from '../src/getMapOrm.mjs'
 import getProc from '../src/getProc.mjs'
 import checkOptRemoved from '../src/checkOptRemoved.mjs'
+import { addHook, settle } from './tools/hookKit.mjs'
 
 
 //替身ORM工廠: 以name辨識所屬實例, 呼叫紀錄寫入log; 回傳形狀依w-orm系列規格(save、del回逐筆陣列, insert回聚合物件)
@@ -30,7 +31,6 @@ function mkWOrm(name, log, behavior = {}) {
 
 let dsAll = { tests: { keys: ['id', 'name', 'isActive', 'timeUpdate'] } }
 let dsNoTime = { tests: { keys: ['id', 'name', 'isActive'] } }
-let wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 async function getReject(pm) {
     try {
@@ -127,25 +127,26 @@ describe('WServOrm實例互不干擾', function() {
     })
 
     it('I05 三種hook各自屬於所註冊之實例', async function() {
-        //R1、R4: 雙向隔離; 註冊並等待超過1ms後生效
+        //R1、R4: 雙向隔離; 註冊後約1ms生效, 以onTrace之active事件同步
         let log = []
         let calls = []
         let A = WServOrm(dsAll, mkWOrm('A', log), 'url-a', 'db-a')
         let B = WServOrm(dsAll, mkWOrm('B', log), 'url-b', 'db-b')
+        let ps = []
         for (let [name, ins] of [['A', A], ['B', B]]) {
-            ins.addFunCheck(() => {
+            ps.push(addHook(ins, 'addFunCheck', () => {
                 calls.push(`${name}-check`)
-            })
-            ins.addFunPreProcessing((p) => {
+            }))
+            ps.push(addHook(ins, 'addFunPreProcessing', (p) => {
                 calls.push(`${name}-pre`)
                 return p
-            })
-            ins.addFunPostProcessing((p) => {
+            }))
+            ps.push(addHook(ins, 'addFunPostProcessing', (p) => {
                 calls.push(`${name}-post`)
                 return p.output
-            })
+            }))
         }
-        await wait(20)
+        await Promise.all(ps)
         await A.procOrm('u1', 'tests', 'select', {})
         assert.strict.deepEqual(calls, ['A-check', 'A-pre', 'A-post'])
         calls.length = 0
@@ -158,10 +159,9 @@ describe('WServOrm實例互不干擾', function() {
         let log = []
         let calls = []
         let A = WServOrm(dsAll, mkWOrm('A', log), 'url-a', 'db-a')
-        A.addFunCheck(() => {
+        await addHook(A, 'addFunCheck', () => {
             calls.push('A-check')
         })
-        await wait(20)
         let C = WServOrm(dsAll, mkWOrm('C', log), 'url-c', 'db-c')
         await C.procOrm('u1', 'tests', 'select', {})
         assert.strict.deepEqual(calls, [])
@@ -189,18 +189,19 @@ describe('WServOrm實例互不干擾', function() {
         //R3: 隨useCheckUser移除, 參數物件只含woName、userId、mode、input, 後處理另含output
         let A = WServOrm(dsAll, mkWOrm('A', []), 'url-a', 'db-a')
         let ks = {}
-        A.addFunCheck((p) => {
-            ks.check = Object.keys(p)
-        })
-        A.addFunPreProcessing((p) => {
-            ks.pre = Object.keys(p)
-            return p
-        })
-        A.addFunPostProcessing((p) => {
-            ks.post = Object.keys(p)
-            return p.output
-        })
-        await wait(20)
+        await Promise.all([
+            addHook(A, 'addFunCheck', (p) => {
+                ks.check = Object.keys(p)
+            }),
+            addHook(A, 'addFunPreProcessing', (p) => {
+                ks.pre = Object.keys(p)
+                return p
+            }),
+            addHook(A, 'addFunPostProcessing', (p) => {
+                ks.post = Object.keys(p)
+                return p.output
+            }),
+        ])
         await A.procOrm('u1', 'tests', 'select', {})
         assert.strict.deepEqual(ks, {
             check: ['woName', 'userId', 'mode', 'input'],
@@ -216,13 +217,17 @@ describe('WServOrm實例互不干擾', function() {
         let gate = new Promise((resolve) => {
             release = resolve
         })
+        let enter = null
+        let pmEnter = new Promise((resolve) => {
+            enter = resolve
+        })
         let A = WServOrm(dsAll, mkWOrm('A', log), 'url-a', 'db-a')
-        A.addFunCheck(async () => {
+        await addHook(A, 'addFunCheck', async () => {
+            enter()
             await gate
         })
-        await wait(20)
         let pA = A.procOrm('u1', 'tests', 'select', {})
-        await wait(5)
+        await pmEnter //A之check已進入(呼叫進行中), 以check自身之事件同步
         WServOrm(dsAll, mkWOrm('B', log), 'url-b', 'db-b')
         release()
         let rA = await pA
@@ -311,11 +316,10 @@ describe('procOrm後處理', function() {
         let calls = []
         let save = (d) => d.map((v, k) => (k === 1 ? { n: 1, ok: 0, err: 'E' } : { n: 1, ok: 1 }))
         let A = WServOrm(dsAll, mkWOrm('A', log, { save }), 'url-a', 'db-a')
-        A.addFunPostProcessing((p) => {
+        await addHook(A, 'addFunPostProcessing', (p) => {
             calls.push(p.mode)
             return p.output
         })
-        await wait(20)
         let err = await getReject(A.procOrm('u1', 'tests', 'save', [{ id: 'a' }, { id: 'b' }]))
         assert.strict.equal(err, 'failed to save data: id[b]')
         assert.strict.deepEqual(calls, [])
@@ -468,9 +472,10 @@ describe('hook串接與註冊', function() {
         //D3: 每個後處理皆收參數物件, output為前一個之回傳值
         let log = []
         let A = WServOrm(dsTwo, mkWOrm('A', log), 'url-a', 'db-a')
-        A.addFunPostProcessing(({ woName, output }) => (woName !== 'users' ? output : output.map((v) => ({ ...v, tagA: 1 }))))
-        A.addFunPostProcessing(({ woName, output }) => (woName !== 'items' ? output : output.map((v) => ({ ...v, tagB: 1 }))))
-        await wait(20)
+        await Promise.all([
+            addHook(A, 'addFunPostProcessing', ({ woName, output }) => (woName !== 'users' ? output : output.map((v) => ({ ...v, tagA: 1 })))),
+            addHook(A, 'addFunPostProcessing', ({ woName, output }) => (woName !== 'items' ? output : output.map((v) => ({ ...v, tagB: 1 })))),
+        ])
         let rU = await A.procOrm('u1', 'users', 'select', {})
         let rI = await A.procOrm('u1', 'items', 'select', {})
         assert.ok(rU.every((v) => v.tagA === 1 && !('tagB' in v)))
@@ -481,25 +486,27 @@ describe('hook串接與註冊', function() {
         //D3: 不加特例; 某個拋錯則procOrm reject且後續不執行
         let calls = []
         let A = WServOrm(dsAll, mkWOrm('A', []), 'url-a', 'db-a')
-        A.addFunPostProcessing(() => undefined)
-        A.addFunPostProcessing((p) => {
-            calls.push(p.output)
-            return p.output
-        })
-        await wait(20)
+        await Promise.all([
+            addHook(A, 'addFunPostProcessing', () => undefined),
+            addHook(A, 'addFunPostProcessing', (p) => {
+                calls.push(p.output)
+                return p.output
+            }),
+        ])
         let r = await A.procOrm('u1', 'tests', 'select', {})
         assert.strict.equal(r, undefined)
         assert.strict.deepEqual(calls, [undefined])
         let B = WServOrm(dsAll, mkWOrm('B', []), 'url-b', 'db-b')
         let after = []
-        B.addFunPostProcessing(() => {
-            throw new Error('E-post')
-        })
-        B.addFunPostProcessing((p) => {
-            after.push(1)
-            return p.output
-        })
-        await wait(20)
+        await Promise.all([
+            addHook(B, 'addFunPostProcessing', () => {
+                throw new Error('E-post')
+            }),
+            addHook(B, 'addFunPostProcessing', (p) => {
+                after.push(1)
+                return p.output
+            }),
+        ])
         let err = await getReject(B.procOrm('u1', 'tests', 'select', {}))
         assert.ok(String(err).includes('E-post'))
         assert.strict.deepEqual(after, [])
@@ -510,12 +517,13 @@ describe('hook串接與註冊', function() {
         let log = []
         let seen = []
         let A = WServOrm(dsTwo, mkWOrm('A', log), 'url-a', 'db-a')
-        A.addFunPreProcessing((p) => ({ input: p.input.map((v) => ({ ...v, preA: 1 })) }))
-        A.addFunPreProcessing((p) => {
-            seen.push(p.woName)
-            return { ...p, input: p.input.map((v) => ({ ...v, preB: 1 })) }
-        })
-        await wait(20)
+        await Promise.all([
+            addHook(A, 'addFunPreProcessing', (p) => ({ input: p.input.map((v) => ({ ...v, preA: 1 })) })),
+            addHook(A, 'addFunPreProcessing', (p) => {
+                seen.push(p.woName)
+                return { ...p, input: p.input.map((v) => ({ ...v, preB: 1 })) }
+            }),
+        ])
         await A.procOrm('u1', 'users', 'save', [{ id: 'x' }])
         assert.strict.deepEqual(seen, ['users'])
         assert.strict.equal(log[0].data[0].preA, 1)
@@ -527,8 +535,7 @@ describe('hook串接與註冊', function() {
         for (let bad of [undefined, [1], { woName: 'tests' }]) {
             let log = []
             let A = WServOrm(dsAll, mkWOrm('A', log), 'url-a', 'db-a')
-            A.addFunPreProcessing(() => bad)
-            await wait(20)
+            await addHook(A, 'addFunPreProcessing', () => bad)
             let err = await getReject(A.procOrm('u1', 'tests', 'select', {}))
             assert.strict.equal(err, 'invalid return of pre-processing, need an object with input')
             assert.strict.deepEqual(log, [])
@@ -542,20 +549,23 @@ describe('hook串接與註冊', function() {
             release = resolve
         })
         let calls = []
+        let enter = null
+        let pmEnter = new Promise((resolve) => {
+            enter = resolve
+        })
         let A = WServOrm(dsAll, mkWOrm('A', []), 'url-a', 'db-a')
-        A.addFunPostProcessing(async (p) => {
+        await addHook(A, 'addFunPostProcessing', async (p) => {
             calls.push('h1')
+            enter()
             await gate
             return p.output
         })
-        await wait(20)
         let pm = A.procOrm('u1', 'tests', 'select', {})
-        await wait(5)
-        A.addFunPostProcessing((p) => {
+        await pmEnter //h1已進入(後處理階段已取快照), 以h1自身之事件同步
+        await addHook(A, 'addFunPostProcessing', (p) => {
             calls.push('h2')
             return p.output
         })
-        await wait(20)
         release()
         await pm
         assert.strict.deepEqual(calls, ['h1'])
@@ -572,13 +582,14 @@ describe('hook串接與註冊', function() {
             }
         }
         let B = WServOrm(dsAll, mkWOrm('B', []), 'url-b', 'db-b')
+        let ps = []
         for (let k of ['addFunCheck', 'addFunPreProcessing', 'addFunPostProcessing']) {
-            B[k](function(p) {
+            ps.push(addHook(B, k, function(p) {
                 return k === 'addFunCheck' ? undefined : (k === 'addFunPreProcessing' ? p : p.output)
-            })
-            B[k](async (p) => (k === 'addFunCheck' ? undefined : (k === 'addFunPreProcessing' ? p : p.output)))
+            }))
+            ps.push(addHook(B, k, async (p) => (k === 'addFunCheck' ? undefined : (k === 'addFunPreProcessing' ? p : p.output))))
         }
-        await wait(20)
+        await Promise.all(ps)
         let r = await B.procOrm('u1', 'tests', 'select', {})
         assert.strict.equal(r.length, 2)
     })
@@ -590,7 +601,7 @@ describe('hook串接與註冊', function() {
             A.addFunCheck(null)
         }
         catch (e) {}
-        await wait(20)
+        await settle(A) //註冊失敗不應排定任何生效, 以後註冊之無作用check之生效事件為屏障(同為1ms計時器, 依註冊先後生效)
         let err = await getReject(A.procOrm('u1', 'tests', 'select', {}))
         assert.ok(String(err).includes('addFunCheck'))
         //錯誤型別: 守門於procOrm內reject, 與procOrm其餘拒絕一致為字串
@@ -602,7 +613,7 @@ describe('hook串接與註冊', function() {
             }
             catch (e) {}
         }
-        await wait(20)
+        await settle(B)
         let r = await B.procOrm('u1', 'tests', 'select', {})
         assert.strict.equal(r.length, 2)
     })

@@ -3,6 +3,7 @@ import WServOrm from '../src/WServOrm.mjs'
 import { buildBaseline } from '../src/baseline.mjs'
 import { createMemOrm } from './tools/memOrm.mjs'
 import { getReject, quiet } from './tools/ormStub.mjs'
+import { addHook } from './tools/hookKit.mjs'
 
 
 //規格: 多人同時編輯之寫入契約 §6、§7、V1、V6、V7、V12、V13、V14; 規則帳本 R-LOCK-01、R-GUARD-01、R-ONLYMOD-01
@@ -829,16 +830,17 @@ describe('procOrm opt: mustExist 只改不增與刪除未命中(規格 §6、V6�
     it('M12b 無效opt先於擴充函數驗證(外審sol#3): 註冊有副作用之check與前處理時, 無效opt仍固定字串拒收, 擴充函數0次呼叫、ORM 0次呼叫; check拋錯亦不遮蔽固定拒收字串', async function() {
         let { so, m } = mkSo()
         let called = []
-        so.addFunCheck(() => {
-            called.push('check')
-            throw new Error('check would reject first')
-        })
-        so.addFunPreProcessing(async (x) => {
-            called.push('pre')
-            await so.woItems.a.save({ id: 'side-effect' })
-            return { input: x.input }
-        })
-        await wait(5)
+        await Promise.all([
+            addHook(so, 'addFunCheck', () => {
+                called.push('check')
+                throw new Error('check would reject first')
+            }),
+            addHook(so, 'addFunPreProcessing', async (x) => {
+                called.push('pre')
+                await so.woItems.a.save({ id: 'side-effect' })
+                return { input: x.input }
+            }),
+        ])
         m.reset()
         for (let opt of [{ mustExist: 'true' }, { mustexist: true }, 'x', { mustExist: true, extra: 1 }]) {
             let err = await quiet(() => getReject(so.procOrm('u', 'a', 'save', [{ id: 'r1', name: 'A' }], opt)))
@@ -874,18 +876,20 @@ describe('procOrm opt: mustExist 只改不增與刪除未命中(規格 §6、V6�
         let { so } = mkSo()
         await so.procOrm('u', 'a', 'save', [{ id: 'r1', name: 'A' }, { id: 'r2', name: 'B' }])
         let seen = []
-        so.addFunCheck((x) => {
-            seen.push(`check:${Object.keys(x).sort().join(',')}`)
-        })
-        so.addFunPreProcessing((x) => {
-            seen.push(`pre:${Object.keys(x).sort().join(',')}`)
-            return { input: x.input }
-        })
-        so.addFunPostProcessing((x) => {
-            seen.push(`post:${Object.keys(x).sort().join(',')}`)
-            return x.output
-        })
-        await wait(5) //擴充函數註冊後約1毫秒生效
+        //擴充函數註冊後約1毫秒生效, 以onTrace之active事件同步
+        await Promise.all([
+            addHook(so, 'addFunCheck', (x) => {
+                seen.push(`check:${Object.keys(x).sort().join(',')}`)
+            }),
+            addHook(so, 'addFunPreProcessing', (x) => {
+                seen.push(`pre:${Object.keys(x).sort().join(',')}`)
+                return { input: x.input }
+            }),
+            addHook(so, 'addFunPostProcessing', (x) => {
+                seen.push(`post:${Object.keys(x).sort().join(',')}`)
+                return x.output
+            }),
+        ])
         let r = await so.procOrm('u', 'a', 'save', [{ id: 'r1', name: 'A2' }], { mustExist: true })
         assert.deepStrictEqual(r, [{ id: 'r1' }])
         let r2 = await so.procOrm('u', 'a', 'del', [{ id: 'r2' }], { mustExist: true })
@@ -899,12 +903,13 @@ describe('procOrm opt: mustExist 只改不增與刪除未命中(規格 §6、V6�
         let { so, m } = mkSo()
         await so.procOrm('u', 'a', 'save', [{ id: 'r1', name: 'A' }])
         let calledPost = 0
-        so.addFunPreProcessing((x) => ({ input: x.input.map((v) => ({ ...v, id: 'ghost-by-hook' })) }))
-        so.addFunPostProcessing((x) => {
-            calledPost++
-            return x.output
-        })
-        await wait(5)
+        await Promise.all([
+            addHook(so, 'addFunPreProcessing', (x) => ({ input: x.input.map((v) => ({ ...v, id: 'ghost-by-hook' })) })),
+            addHook(so, 'addFunPostProcessing', (x) => {
+                calledPost++
+                return x.output
+            }),
+        ])
         m.reset()
         let err = await quiet(() => getReject(so.procOrm('u', 'a', 'save', [{ id: 'r1', name: 'A' }], { mustExist: true })))
         assert.strict.equal(err, 'rowNotFound', '前處理改寫後之id不存在')

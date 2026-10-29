@@ -1,6 +1,7 @@
 import assert from 'assert'
 import WServOrm from '../src/WServOrm.mjs'
 import getMapOrm from '../src/getMapOrm.mjs'
+import { addHook } from './tools/hookKit.mjs'
 
 
 //替身ORM: 記錄收到之數據, 回傳形狀依w-orm系列規格(save、del回逐筆陣列, insert與delAll回聚合物件); plan可覆寫各函數之回傳
@@ -38,7 +39,6 @@ let dsInt = { tests: { keys: ['id', 'name'], settings: { id: { pk: true, type: '
 let dsAudit = { tests: { keys: ['id', 'name', 'userId', 'timeCreate', 'userIdUpdate', 'timeUpdate'] } }
 let isGen = (v) => typeof v === 'string' && v.length > 30
 let idOf = (d) => (Array.isArray(d) ? d[0].id : d.id)
-let wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 async function getReject(pm) {
     try {
@@ -204,12 +204,13 @@ describe('R-ID-02 字串型主鍵欄之數字主鍵以字串處置', function() 
         //R-ID-02 規則5; R-HOOK-01 規則5
         let so = WServOrm(dsStr, WOrmStub, 'u', 'd')
         let seen = []
-        so.addFunPreProcessing(({ input }) => ({ input: [...input, { id: 2, name: 'pre' }] }))
-        so.addFunPostProcessing(({ input, output }) => {
-            seen.push({ input, output })
-            return output
-        })
-        await wait(20)
+        await Promise.all([
+            addHook(so, 'addFunPreProcessing', ({ input }) => ({ input: [...input, { id: 2, name: 'pre' }] })),
+            addHook(so, 'addFunPostProcessing', ({ input, output }) => {
+                seen.push({ input, output })
+                return output
+            }),
+        ])
         let r = await so.procOrm('u1', 'tests', 'insert', [{ id: 1, name: 'a' }])
         assert.deepStrictEqual(seen[0].input, [{ id: 1, name: 'a' }, { id: 2, name: 'pre' }])
         assert.deepStrictEqual(seen[0].output, [{ id: '1' }, { id: '2' }])

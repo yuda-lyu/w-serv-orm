@@ -5,6 +5,8 @@ import util from 'util'
 import WServOrm from '../src/WServOrm.mjs'
 import getMapOrm from '../src/getMapOrm.mjs'
 import { createStub, getReject, quiet, same, mkForgedObjProto as mkForged12 } from './tools/ormStub.mjs'
+import { addHook } from './tools/hookKit.mjs'
+import { cpuMs } from './tools/cpuBound.mjs'
 
 
 //R-OBJ-01 使用端物件之迭代與複製(L01-L04、P01-P03)、R-INPUT-01 規則3 之 select 與 delAll(D01-D03)
@@ -16,7 +18,6 @@ let dsStr = { tests: { keys: ['id', 'name', 'length'], settings: { id: { pk: tru
 let dsUnknown = { tests: { keys: ['id', 'name', 'length'] } }
 let dsInt = { tests: { keys: ['id', 'name', 'length'], settings: { id: { pk: true, type: 'INTEGER' }, name: { type: 'STRING' } } } }
 let isGen = (v) => typeof v === 'string' && v.length > 30
-let wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 let clone = (v) => structuredClone(v)
 
 //kinds, 四種資料表型態: 字串型主鍵(轉型與補值)、型別未知(同)、整數型主鍵(皆不)、ds無該表(皆不; 直接呼叫getMapOrm令ds與woItems不一致)
@@ -90,9 +91,9 @@ describe('R-OBJ-01 使用端物件之迭代與複製', function() {
 
                 let f2 = { length: Number.MAX_SAFE_INTEGER, name: 'x' }
                 stub.reset()
-                let t = Date.now()
-                await proc('u1', 'tests', mode, f2)
-                assert.ok(Date.now() - t < 1000, `${kind} ${mode} length=2^53-1 耗時 ${Date.now() - t} ms`)
+                //[P6 效能時限] 不依length迭代: 以CPU時間斷言, 裕度1000 CPU毫秒(見test/tools/cpuBound.mjs)
+                let { cpu } = await cpuMs(() => proc('u1', 'tests', mode, f2), `L02 ${kind} ${mode}`)
+                assert.ok(cpu < 1000, `${kind} ${mode} length=2^53-1 CPU耗時 ${cpu} ms`)
                 same(calls[0].data, { length: Number.MAX_SAFE_INTEGER, name: 'x' }, `${kind} ${mode} length=2^53-1`)
             }
         }
@@ -190,10 +191,9 @@ describe('R-OBJ-01 使用端物件之迭代與複製', function() {
         //R-OBJ-01 依據: S5「授權所見即執行所用」在ORM邊界須成立
         let so = WServOrm(dsStr, WOrmStub, 'u', 'd')
         let seen = []
-        so.addFunCheck(({ input }) => {
+        await addHook(so, 'addFunCheck', ({ input }) => {
             seen.push(clone(input))
         })
-        await wait(20)
         let list = finds.filter(([, expectCast]) => expectCast === undefined).map(([f]) => f)
         for (let f of list) {
             await so.procOrm('u1', 'tests', 'select', f)
@@ -612,8 +612,7 @@ describe('R-INPUT-01 規則3 select與delAll之find須為物件', function() {
         let err = await quiet(() => getReject(so.procOrm('u1', 'tests', 'select', 'SECRET-VALUE')))
         assert.strictEqual(typeof err, 'string')
         assert.ok(!err.includes('SECRET'), err)
-        so.addFunPreProcessing(({ input }) => ({ input: input === undefined ? null : input }))
-        await wait(20)
+        await addHook(so, 'addFunPreProcessing', ({ input }) => ({ input: input === undefined ? null : input }))
         let err2 = await quiet(() => getReject(so.procOrm('u1', 'tests', 'select')))
         assert.strictEqual(err2, 'invalid find of select, need an object')
         assert.deepStrictEqual(calls, [])
@@ -1853,11 +1852,6 @@ describe('R-OBJ-01 規則7 批次容器(S03、S04)', function() {
     let okRow = () => ({ id: 'a1', name: 'x' })
     let sp = (n) => new Array(n)
     let rj = (proc, mode, input) => quiet(() => getReject(proc('u1', 'tests', mode, input)))
-    let elapsed = async (fn) => {
-        let t = Date.now()
-        let r = await fn()
-        return [r, Date.now() - t]
-    }
 
     it('S03 批次容器為偽造標籤之類陣列、Proxy陣列、有空洞(含原型帶資料索引)、原型鏈有標籤: 整批reject, 繞過規則3之列不被寫入, length與陷阱0次(F5)', async function() {
         //規則7 ③④; R-INPUT-01 規則1、2(批次容器); 修前: 偽造標籤與空洞+繼承索引兩形狀使含巢狀自有__proto__之列通過getMsgsBadKey並被送到ORM
@@ -1992,18 +1986,19 @@ describe('R-OBJ-01 規則7 批次容器(S03、S04)', function() {
             for (let len of [1e5, 2 ** 32 - 1, 1e9]) {
                 for (let [lab, mode, input, expected] of build(len)) {
                     stub.reset()
-                    let [err, ms] = await elapsed(() => rj(proc, mode, input))
+                    //[P6 效能時限] 不逐索引迴圈: 以CPU時間斷言, 裕度1000 CPU毫秒(見test/tools/cpuBound.mjs)
+                    let { r: err, cpu } = await cpuMs(() => rj(proc, mode, input), `S04 ${kind} ${lab} len=${len}`)
                     assert.strictEqual(err, expected, `${kind} ${lab} len=${len}`)
-                    assert.ok(ms < 1000, `${kind} ${lab} len=${len} 耗時 ${ms} ms`)
+                    assert.ok(cpu < 1000, `${kind} ${lab} len=${len} CPU耗時 ${cpu} ms`)
                     assert.deepStrictEqual(calls, [], `${kind} ${lab} len=${len} ORM不應被呼叫`)
                     done++
                 }
                 for (let mode of ['select', 'delAll']) {
                     for (let [lab, find] of findCases(len)) {
                         stub.reset()
-                        let [err, ms] = await elapsed(() => rj(proc, mode, find))
+                        let { r: err, cpu } = await cpuMs(() => rj(proc, mode, find), `S04 ${kind} ${mode} ${lab} len=${len}`)
                         assert.strictEqual(err, `invalid find of ${mode}, unsupported irregular object or array`, `${kind} ${mode} ${lab} len=${len}`)
-                        assert.ok(ms < 1000, `${kind} ${mode} ${lab} len=${len} 耗時 ${ms} ms`)
+                        assert.ok(cpu < 1000, `${kind} ${mode} ${lab} len=${len} CPU耗時 ${cpu} ms`)
                         assert.deepStrictEqual(calls, [], `${kind} ${mode} ${lab} len=${len} ORM不應被呼叫`)
                         done++
                     }
@@ -2263,13 +2258,10 @@ describe('R-OBJ-01 規則5 續 find之最長路徑深度與展開後容器數(S0
                 if (kind === 'int' || kind === 'none') {
                     for (let [k, msg] of [[21, large(mode)], [31, large(mode)], [32, deep(mode)], [60, deep(mode)], [5000, deep(mode)]]) {
                         stub.reset()
-                        let [err, ms] = await (async () => {
-                            let t = Date.now()
-                            let e = await rj(proc, mode, expDag(k))
-                            return [e, Date.now() - t]
-                        })()
+                        //[P6 效能時限] 不展開指數型DAG: 以CPU時間斷言, 裕度1000 CPU毫秒
+                        let { r: err, cpu } = await cpuMs(() => rj(proc, mode, expDag(k)), `S06 ${L} expDag k=${k}`)
                         assert.strictEqual(err, msg, `${L} expDag k=${k}`)
-                        assert.ok(ms < 1000, `${L} expDag k=${k} 耗時 ${ms} ms`)
+                        assert.ok(cpu < 1000, `${L} expDag k=${k} CPU耗時 ${cpu} ms`)
                         assert.strictEqual(calls.length, 0, `${L} expDag k=${k} ORM不應被呼叫`)
                         done++
                     }
@@ -2277,9 +2269,9 @@ describe('R-OBJ-01 規則5 續 find之最長路徑深度與展開後容器數(S0
                 else {
                     //k=20於修前約1秒、+213MB後交ORM; 修後立即reject
                     stub.reset()
-                    let t = Date.now()
-                    assert.strictEqual(await rj(proc, mode, expDag(20)), large(mode), `${L} expDag k=20`)
-                    assert.ok(Date.now() - t < 1000, `${L} expDag k=20 耗時 ${Date.now() - t} ms`)
+                    let { r: err, cpu } = await cpuMs(() => rj(proc, mode, expDag(20)), `S06 ${L} expDag k=20`)
+                    assert.strictEqual(err, large(mode), `${L} expDag k=20`)
+                    assert.ok(cpu < 1000, `${L} expDag k=20 CPU耗時 ${cpu} ms`)
                     assert.strictEqual(calls.length, 0, `${L} expDag k=20 ORM不應被呼叫`)
                     done++
                 }
@@ -2863,17 +2855,17 @@ describe('R-OBJ-01 規則7 續 檢查之後不執行使用端程式(S09~S14)', f
                 assert.strictEqual(await rjS(proc, mode, { id: { $in: withChain([], 63) } }), `invalid find of ${mode}, ${IRREG}`, `${L} 鏈上66個物件`)
                 assert.strictEqual(calls.length, 0, `${L} ORM不應被呼叫`)
                 //極長之鏈: 不逐層走完(成本有界)
-                let t = Date.now()
+                //[P6 效能時限] 以CPU時間斷言, 裕度: 20萬層1000、2萬次共用長鏈3000 CPU毫秒(見test/tools/cpuBound.mjs)
                 stub.reset()
-                assert.strictEqual(await rjS(proc, mode, { id: { $in: withChain([], 200000) } }), `invalid find of ${mode}, ${IRREG}`, `${L} 20萬層`)
-                assert.ok(Date.now() - t < 1000, `${L} 20萬層耗時 ${Date.now() - t} ms`)
+                let { r: errLong, cpu: cpuLong } = await cpuMs(() => rjS(proc, mode, { id: { $in: withChain([], 200000) } }), `S13 ${L} 20萬層`)
+                assert.strictEqual(errLong, `invalid find of ${mode}, ${IRREG}`, `${L} 20萬層`)
+                assert.ok(cpuLong < 1000, `${L} 20萬層CPU耗時 ${cpuLong} ms`)
                 //共用之長鏈陣列被引用多次(E x P 有界)
                 let shared = withChain([], 62)
-                t = Date.now()
                 stub.reset()
-                await quiet(() => proc('u1', 'tests', mode, { $or: Array.from({ length: 20000 }, () => shared) }))
+                let { cpu: cpuShared } = await cpuMs(() => quiet(() => proc('u1', 'tests', mode, { $or: Array.from({ length: 20000 }, () => shared) })), `S13 ${L} 共用長鏈2萬次`)
                 assert.strictEqual(calls.length, 1, `${L} 共用長鏈陣列2萬次通過`)
-                assert.ok(Date.now() - t < 3000, `${L} 共用長鏈陣列2萬次耗時 ${Date.now() - t} ms`)
+                assert.ok(cpuShared < 3000, `${L} 共用長鏈陣列2萬次CPU耗時 ${cpuShared} ms`)
             }
         }
     })

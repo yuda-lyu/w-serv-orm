@@ -18,4 +18,5 @@
 | 擴充函數、授權、實例、備份還原與相容 | `rulebook_runtime.md` | R-HOOK-01、R-AUTH-01、R-INST-01、R-DB-01、R-COMPAT-01 |
 | 破壞性變更紀錄、其他已知限制與 delAll 使用須知 | `rulebook_changes.md` | 破壞性變更紀錄、其他已知限制、〔delAll 使用須知(使用者裁示)〕 |
 | 診斷輸出(console)不得含資料值(2026-10-28 orm-run01 新增) | `rulebook_diag.md` | R-DIAG-01(預設只輸出標籤與摘要;`opt.logDetail`、`opt.funLog`;站點全集 72 站;盤點以 `test/unit-diaglog.test.mjs` S01 鎖定) |
+| 計時器相關函數之觀察回調與以事件同步之測試(2026-10-29 tm-servorm 新增;規格 `C:\opensrcOper\dspec\計時器相關函數之觀察回調與測試.md`) | `rulebook_timer.md` | R-TRACE-01(擴充函數生效之 `opt.onTrace`、`test/tools/hookKit.mjs` 以事件同步、效能時限類改 CPU 時間斷言 `test/tools/cpuBound.mjs`;站點全集 1 處;處理清單與 A 類不改清單) |
 | 多人同時編輯之寫入共用核心(2026-10-22 第 110 項 run01 新增) | `rulebook_concurrency.md` | R-BASELINE-01、R-LOCK-01、R-GUARD-01、R-ONLYMOD-01、R-KEEPUSER-01(2026-10-23 run02 新增) |

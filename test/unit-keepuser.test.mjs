@@ -3,6 +3,7 @@ import WServOrm from '../src/WServOrm.mjs'
 import getMapOrm from '../src/getMapOrm.mjs'
 import { createMemOrm } from './tools/memOrm.mjs'
 import { getReject, quiet } from './tools/ormStub.mjs'
+import { addHook } from './tools/hookKit.mjs'
 
 
 //規格: w-web-sso 需求 T2①(任務 orm-run02): sso之tokens.userId是權杖擁有者而非建立者, 依擁有者分組以擁有者當procOrm之第1參數寫入會使userIdUpdate亦被記成擁有者;
@@ -17,8 +18,6 @@ import { getReject, quiet } from './tools/ormStub.mjs'
 //  K08-K11 「與mustExist相同之驗證時點與方式: 未知鍵、非布林、用於不適用之mode → 於任何讀寫與擴充函數之前以固定字串reject」「無效opt於寫入前拒收」
 //  K12-K13 實作者補強(擴充函數參數形狀不變、前處理改寫後之input為保留判定之依據)
 //  K14     「若save時現行會覆寫userId, 一併評估」→ save現行不覆寫userId(只補userIdUpdate、timeUpdate), 故不適用而拒收
-
-let wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 let KEYS = ['id', 'name', 'userId', 'userIdUpdate', 'timeCreate', 'timeUpdate']
 
@@ -233,16 +232,17 @@ describe('procOrm opt: keepUserId 保留擁有者userId(T2①)', function() {
     it('K12 無效opt先於擴充函數驗證: 註冊有副作用之check與前處理時, keepUserId非布林與用於非insert皆固定字串拒收, 擴充函數0次呼叫、ORM 0次呼叫; 有效opt時check照常先執行', async function() {
         let { so, m } = mkSo()
         let called = []
-        so.addFunCheck(() => {
-            called.push('check')
-            throw new Error('check would reject first')
-        })
-        so.addFunPreProcessing(async (x) => {
-            called.push('pre')
-            await so.woItems.a.save({ id: 'side-effect' })
-            return { input: x.input }
-        })
-        await wait(5)
+        await Promise.all([
+            addHook(so, 'addFunCheck', () => {
+                called.push('check')
+                throw new Error('check would reject first')
+            }),
+            addHook(so, 'addFunPreProcessing', async (x) => {
+                called.push('pre')
+                await so.woItems.a.save({ id: 'side-effect' })
+                return { input: x.input }
+            }),
+        ])
         m.reset()
         for (let opt of [{ keepUserId: 'true' }, { keepUserId: 1 }, { keepuserid: true }]) {
             let err = await quiet(() => getReject(so.procOrm('op', 'a', 'insert', [{ id: 'r1' }], opt)))
@@ -262,18 +262,19 @@ describe('procOrm opt: keepUserId 保留擁有者userId(T2①)', function() {
     it('K13 擴充函數(check、前處理、後處理)之參數物件不含opt(鍵集合同舊介面); 前處理改寫後之input為保留判定之依據', async function() {
         let { so, m } = mkSo()
         let seen = []
-        so.addFunCheck((x) => {
-            seen.push(`check:${Object.keys(x).sort().join(',')}`)
-        })
-        so.addFunPreProcessing((x) => {
-            seen.push(`pre:${Object.keys(x).sort().join(',')}`)
-            return { input: x.input.map((v) => ({ ...v, userId: 'hook-owner' })) }
-        })
-        so.addFunPostProcessing((x) => {
-            seen.push(`post:${Object.keys(x).sort().join(',')}`)
-            return x.output
-        })
-        await wait(5)
+        await Promise.all([
+            addHook(so, 'addFunCheck', (x) => {
+                seen.push(`check:${Object.keys(x).sort().join(',')}`)
+            }),
+            addHook(so, 'addFunPreProcessing', (x) => {
+                seen.push(`pre:${Object.keys(x).sort().join(',')}`)
+                return { input: x.input.map((v) => ({ ...v, userId: 'hook-owner' })) }
+            }),
+            addHook(so, 'addFunPostProcessing', (x) => {
+                seen.push(`post:${Object.keys(x).sort().join(',')}`)
+                return x.output
+            }),
+        ])
         let r = await so.procOrm('op', 'a', 'insert', [{ id: 'r1' }], { keepUserId: true })
         assert.deepStrictEqual(r, [{ id: 'r1' }])
         let base = 'input,mode,userId,woName'

@@ -6,6 +6,7 @@ import assert from 'assert'
 import WOrm from 'w-orm-lowdb/src/WOrmLowdb.mjs'
 import WServOrm from '../src/WServOrm.mjs'
 import { getReject, quiet, same, mkForgedObjProto } from './tools/ormStub.mjs'
+import { cpuMs } from './tools/cpuBound.mjs'
 
 
 //以真ORM(w-orm-lowdb, mingo查詢)經procOrm驗證R-OBJ-01: 含整數length鍵之find與寫入列, 結果須等於以JS參考實作(預言機)算得者
@@ -783,9 +784,10 @@ describe('R-OBJ-01 接w-orm-lowdb(以JS參考實作為預言機)', function() {
                 ['find $in select', 'select', { id: { $in: new Array(len) } }, `invalid find of select, ${msgIrreg}`],
                 ['find $in delAll', 'delAll', { id: { $in: new Array(len) } }, `invalid find of delAll, ${msgIrreg}`],
             ]) {
-                let t = Date.now()
-                assert.strictEqual(await getReject(proc(mode, input)), want, `${lab} len=${len}`)
-                assert.ok(Date.now() - t < 1000, `${lab} len=${len} 耗時 ${Date.now() - t} ms`)
+                //[P6 效能時限] 處理量有界(不逐索引迴圈): 以CPU時間斷言, 裕度1000 CPU毫秒(見test/tools/cpuBound.mjs)
+                let { r, cpu } = await cpuMs(() => getReject(proc(mode, input)), `A28 ${lab} len=${len}`)
+                assert.strictEqual(r, want, `${lab} len=${len}`)
+                assert.ok(cpu < 1000, `${lab} len=${len} CPU耗時 ${cpu} ms`)
                 same(await rows(), before, `${lab} len=${len} 表不變`)
             }
         }
@@ -819,9 +821,10 @@ describe('R-OBJ-01 接w-orm-lowdb(以JS參考實作為預言機)', function() {
             }, 'too deep'],
         ]) {
             for (let mode of ['select', 'delAll']) {
-                let t = Date.now()
-                assert.strictEqual(await getReject(proc(mode, mk())), `invalid find of ${mode}, ${want}`, `${lab} ${mode}`)
-                assert.ok(Date.now() - t < 1000, `${lab} ${mode} 耗時 ${Date.now() - t} ms`)
+                //[P6 效能時限] 不展開共用子結構: 以CPU時間斷言, 裕度1000 CPU毫秒
+                let { r, cpu } = await cpuMs(() => getReject(proc(mode, mk())), `A28 ${lab} ${mode}`)
+                assert.strictEqual(r, `invalid find of ${mode}, ${want}`, `${lab} ${mode}`)
+                assert.ok(cpu < 1000, `${lab} ${mode} CPU耗時 ${cpu} ms`)
                 same(await rows(), before, `${lab} ${mode} 表不變(delAll不刪)`)
             }
         }

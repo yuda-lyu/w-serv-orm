@@ -1,11 +1,12 @@
 import iseobj from 'wsemi/src/iseobj.mjs'
 import pmSeries from 'wsemi/src/pmSeries.mjs'
 import isfun from 'wsemi/src/isfun.mjs'
+import getTrace from 'wsemi/src/getTrace.mjs'
 import checkOptRemoved from './checkOptRemoved.mjs'
 import { getOptProc } from './getMapOrm.mjs'
 
 
-function addFun(fs, f, name, useGuard = false) {
+function addFun(fs, f, name, hook, useGuard, opt) {
     //由外部添加擴充函數至該實例之陣列
     //延後1ms生效係沿用既有之生效時序: 原為避開模組層陣列於循環引用時之「Cannot access before initialization」,
     //改為各實例狀態後該原因已不成立, 惟使用端之啟動流程可能依賴此時序, 故保留
@@ -22,8 +23,15 @@ function addFun(fs, f, name, useGuard = false) {
         throw new Error(msg)
     }
 
+    //opt.onTrace, 觀察回調(R-TRACE-01, 見規則帳本): 於擴充函數實際生效(推入陣列)當下同步通知, 供測試與使用端以事件而非等待毫秒同步; 未給時trace為null, 不組事件物件
+    //取回調放在函數檢查之後, 使無效函數之拋錯與守門行為不受opt影響
+    let trace = getTrace(opt)
+
     setTimeout(() => {
         fs.push(f)
+        if (trace) {
+            trace('active', { hook, n: fs.length })
+        }
     }, 1)
 
 }
@@ -93,17 +101,17 @@ function getProc(mapOrm, opt = {}) {
 
     //回傳函數綁定st而不依賴this, 使用端可解構取用並當裸函數傳遞
     return {
-        addFunCheck: (f) => {
+        addFunCheck: (f, opt) => {
             //由外部添加擴充檢查函數
-            addFun(st.funChecks, f, 'addFunCheck', true)
+            addFun(st.funChecks, f, 'addFunCheck', 'check', true, opt)
         },
-        addFunPreProcessing: (f) => {
+        addFunPreProcessing: (f, opt) => {
             //由外部添加擴充前處理函數
-            addFun(st.funPreProcessing, f, 'addFunPreProcessing')
+            addFun(st.funPreProcessing, f, 'addFunPreProcessing', 'preProcessing', false, opt)
         },
-        addFunPostProcessing: (f) => {
+        addFunPostProcessing: (f, opt) => {
             //由外部添加擴充後置處理函數
-            addFun(st.funPostProcessing, f, 'addFunPostProcessing')
+            addFun(st.funPostProcessing, f, 'addFunPostProcessing', 'postProcessing', false, opt)
         },
         procOrm: async (userId, woName, mode, input, opt) => {
             return procOrm(st, userId, woName, mode, input, opt)
