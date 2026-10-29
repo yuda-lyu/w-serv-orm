@@ -32,16 +32,4 @@ async function cpuMs(fn, label = '') {
 }
 
 
-//cpuMsSync, 同步版
-function cpuMsSync(fn, label = '') {
-    let t0 = performance.now()
-    let c0 = process.cpuUsage()
-    let r = fn()
-    let c = process.cpuUsage(c0)
-    let cpu = (c.user + c.system) / 1000
-    rec(label, cpu, performance.now() - t0)
-    return { r, cpu }
-}
-
-
-export { cpuMs, cpuMsSync }
+export { cpuMs }

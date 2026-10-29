@@ -33,6 +33,8 @@ To view documentation or get support, visit [docs](https://yuda-lyu.github.io/w-
 ## Diagnostic output (console, logDetail, funLog)
 寫入失敗、輸入被拒等情形，本套件會輸出一行診斷(原為 `console.log(標籤, 失敗列 {k, id, err} 或 ORM 錯誤原文)`)。行程標準輸出常被 pm2、容器 log 收集，而主鍵可能是使用者識別(email 等)，故**預設不輸出主鍵、資料值與錯誤原文**，改為只輸出標籤(含表名與操作)與不含個資的摘要。`procOrm` 的 resolve 與 reject 內容與時機不變(reject 的固定字串、逐筆失敗時列主鍵之訊息皆照舊)，只動診斷輸出；唯一刻意的差異：診斷輸出自身拋錯(如 console 格式化使用端物件時拋錯)時，舊版部分站點會使 `procOrm` 轉為 `failed to process input`，現一律吞下、結果不受影響。規則見規則帳本 R-DIAG-01。
 
+**出口、遮罩、細節拷貝與錯誤摘要一律由 wsemi 之共用模組處理**(`wsemi/src/getDiag.mjs` 等，跨套件規格〈診斷輸出與遮罩〉，wsemi 規則帳本 R-DIAG-01；`logDetail`、`funLog`、`safe` 之正規化、細節之遮罩與拷貝之完整規則以 wsemi 各函數之 JSDoc 為準)，本套件只宣告其秘密來源(連線位址 `url`；`getSettings` 為讀入之設定檔帳密)、錯誤代碼集合、`safe` 會用到之鍵與各呼叫點(`src/getDiagBrief.mjs`)。對外之錯誤值(reject、throw)凡含外來值(ORM、檔案系統、擴充函數等使用端回呼拋出或 reject 之值)者，亦經 wsemi 移除本實例之連線憑證(見下〈對外錯誤值〉)。
+
 ```js
 WServOrm(ds, WOrm, url, db, opt) // opt.logDetail、opt.funLog 皆選用
 ```
@@ -40,25 +42,42 @@ WServOrm(ds, WOrm, url, db, opt) // opt.logDetail、opt.funLog 皆選用
 | 設定 | 型別 | 預設 | 行為 |
 |---|---|---|---|
 | (都不給) | — | — | `console.log(標籤, 摘要)`，摘要不含主鍵、資料值與錯誤原文(下表) |
-| `opt.logDetail` | 布林 | `false` | `true` 時 console 還原為完整細節(含主鍵 `id` 與錯誤原文，同舊版輸出)，供除錯 |
-| `opt.funLog` | 函數 `(label, safe, detail)` | 無 | 給予時診斷輸出只交給它，**本套件不寫 console**(含進度訊息、無效參數與設定檔錯誤；`logDetail` 亦不再作用)；`label` 為標籤，`safe` 為上述摘要(無則 `undefined`)，`detail` 為完整細節(含主鍵與錯誤原文；無則不傳)，供使用端遮罩、轉送至自己的 log；與其後流程共用的細節(失敗清單、拋給呼叫端的 `Error`、傳給模型產生器的 schema 等)交給 `funLog` 的是深層拷貝，使用端原地遮罩或改動不影響結果：純物件、類別實例、陣列(含空洞與自有非索引鍵)、`Error`(含 `stack`)、`Date`、`Map`、`Set` 皆複製(只用內建操作，不執行使用端的 getter、實例方法與建構子；存取器以 `[Getter/Setter]` 保留其鍵)；函數(`[Function]`)、`Proxy`(`[Proxy]`)、`RegExp`(`[RegExp]`)、二進位資料如 `Buffer`、TypedArray、`ArrayBuffer`(`[Binary n bytes]`)、`SharedArrayBuffer`、`Promise` 等無法複製的內建物件(`[Object]`)、深度超過 8 或處理的節點與鍵合計超過 5000 者(`[Truncated]`)，以標記字串代替而不交出原參照(因此 `logDetail` 輸出這些值時為標記而非原值)；類別實例與其複本共用原型；被拒條件(find)的細節為有上限的純資料快照(字串 200 字、深度 8、項數與節點數有上限)而非原值；`funLog` 同步拋錯、或回傳 rejected promise 或一般 thenable，皆被吞下，不影響結果(刻意構造的惡意 promise，如 `constructor` 或 `Symbol.species` 拋錯者，不在保證內) |
+| `opt.logDetail` | 布林 | `false` | `true` 時 console 輸出 `console.log(標籤, 細節)`，細節含主鍵 `id` 與錯誤原文，惟**連線憑證已遮罩**(`***`)，供除錯 |
+| `opt.funLog` | 函數 `(label, safe, detail)` | 無 | 給予時診斷輸出只交給它，**本套件不寫 console**(含進度訊息、無效參數與設定檔錯誤；`logDetail` 亦不再作用)；`label` 為標籤，`safe` 為上述摘要(無則 `undefined`)，`detail` 為細節(含主鍵與錯誤原文，連線憑證已遮罩；無則不傳)，供使用端轉送至自己的 log。**細節一律為 wsemi 之 `maskDiagCopy` 所產生之遮罩拷貝**(有界之樹、不執行使用端程式、不交出原參照、不沿用使用端原型；憑證鍵名之值整體 `***`；形態與上限見 wsemi `maskDiagCopy` 之 JSDoc)，使用端原地改動不影響結果；被拒條件(find)的細節為本層建立之有上限純資料快照，再經同一拷貝。`funLog` 帶 `noDetail === true` 屬性者(wsemi `genDiagFunLog` 所產生者即是)只收 `(label, safe)`，本套件不取細節；`funLog` 同步拋錯、或回傳 rejected promise 皆被吞下(原生 Promise 標記已處理，一般 thenable 之 `then` 不被呼叫)，不影響結果 |
 
-* 型別錯誤(`logDetail` 非布林、`funLog` 非函數；`undefined` 與 `null` 視為未給，同 `procOrm` 的 `opt` 與已移除設定的慣例)：建構時拋 `Error`(`invalid opt.logDetail, need a boolean`、`invalid opt.funLog, need a function`)，早於建立各資料表 ORM。選項只讀取一次(固定快照)，各實例各自持有，互不干擾。
-* **`src/` 內所有診斷輸出都經同一出口**(除該出口本身外沒有直接的 `console` 呼叫，測試 S01 鎖定)，包含無效參數、進度、完成訊息與錯誤。摘要的形狀(標籤沿用舊版，如 `users.save fail`)：
+* 型別錯誤(`logDetail` 非布林、`funLog` 非函數；`undefined` 與 `null` 視為未給，同 `procOrm` 的 `opt` 與已移除設定的慣例)：`WServOrm` 建構時拋 `Error`(`invalid opt.logDetail, need a boolean`、`invalid opt.funLog, need a function`)，早於建立各資料表 ORM。選項只讀取一次(固定快照)，各實例各自持有，互不干擾。
+* **`src/` 內所有診斷輸出都經 wsemi 之 `getDiag` 出口**(`src/` 內沒有任何直接的 `console` 呼叫，測試 S01 鎖定)，包含無效參數、進度、完成訊息與錯誤，一律寫 `console.log`(stdout)。摘要 `safe` 只保留本套件宣告之鍵(`n ks skipped ok type reason msgs table tables keys nOther`，恆含 `errType`、`errCode`)，值依 wsemi 之 safe 正規化(字串至多 200 字元、陣列至多 20 項等)。摘要的形狀(標籤沿用舊版，如 `users.save fail`)：
 
 | 情形 | 摘要 `safe` |
 |---|---|
 | 逐筆失敗(`save`、`del`、`mix` 的 `del`/`diff`)、列不是物件、`del` 同批重複主鍵、主鍵會被 `clearXSS` 改寫 | `{ n: 失敗筆數, ks: [前 10 筆的位置 k] }` |
 | ORM 回聚合物件或陣列而 `ok` 為 0(`insert`、`delAll`、違約形狀) | 聚合物件：`{ ok: 0 }`；逐筆陣列：`{ n, ks }`(元素為 Proxy、`ok` 或索引為存取器者不執行，不計入並加 `skipped: 個數`) |
-| ORM 或後端 reject / 拋錯(`catch`)、`adjustData` 失敗、邊界保證 | `{ errType: 建構子名稱, errCode?: 機器代碼 }`；字串 reject 為 `{ errType: 'string' }`；`errCode` 只放行 `ENOENT` 類、`ERR_` 開頭、SQLSTATE 5 碼(前 2 碼須為已知類別)與絕對值至 99999 的整數，訊息文字與其他值不列(前提：`code` 是驅動程式設定的機器代碼，非資料)；標籤中的 mode 只放行固定清單、表名只放行 `woItems` 的自有鍵(**前提：資料表名由部署者於 schema 定義，視為非個資**) |
+| ORM 或後端 reject / 拋錯(`catch`)、`adjustData` 失敗、邊界保證 | wsemi `getDiagBriefErr` 之 `{ errType, errCode? }`：`errType` 只列內建錯誤類別名(`Error`、`TypeError` 等)，其餘(含驅動之類別名如 `MongoServerError`)為 `'Error'`，字串 reject 為 `'string'`；`errCode` 只收明列之代碼集合(系統與 Node 代碼恆含，本套件另宣告 `sqlstate sqlite mysql mssql mongo mongoServer lmdb level`，並讀巢狀之 `original`、`parent`)，不用樣式，訊息文字與其他值不列；標籤中的 mode 只放行固定清單、表名只放行 `woItems` 的自有鍵(**前提：資料表名由部署者於 schema 定義，視為非個資**) |
 | 被拒的條件(find) | `{ reason: 固定的拒收句 }`，不含條件值 |
 | 呼叫端傳入之無效參數(`ds`、`WOrm`、`url`、`db`、`woItems`、備份檔路徑 `fp`) | `{ type: 型別名稱 }`，不列值(`url` 可含連線帳密) |
-| 本就只含固定句型與位置者(`data has unsupported key`、`same id across steps`) | 原樣(訊息不含主鍵) |
+| 本就只含固定句型與位置者(`data has unsupported key`、`same id across steps`) | `{ msgs: [訊息] }`(訊息不含主鍵) |
 | 只有標籤者(`invalid batch container`、`row not found`、`backup finish`) | 無(`console.log(標籤)`) |
-| 備份還原進度(`backup...`、`recover...`，接資料表名，表名取自 `woItems` 的自有鍵) | 表名 |
+| 備份還原進度(`backup...`、`recover...`，表名取自 `woItems` 的自有鍵) | `{ table: 表名 }` |
 
-* 工具路徑同樣處理，選項寫在各函數既有的 `opt`，**型別錯誤者忽略並用預設**(與同處的 `bLog` 一致)：`getDb.backup(woItems, opt)`、`getDb.recover(woItems, fp, opt)` 失敗時預設只輸出 `{ errType }`(Error 的訊息，含 ORM 回傳原文，仍隨 reject 交給呼叫端，契約不變；`logDetail` 為 `true` 時還原為舊版的 `console.log(err)`)；`getDb.recover` 的 `bRela` 路徑傾印 schema 預設只列表名 `{ n, tables }`；`WServOrm(...)` 實例上的 `backup(woItems)`、`recover(fp, woItems, genModels, needCreateStorage)` 參數不變(各實例的函數身分不同)，診斷輸出依該實例的 `opt`；`genTestData(ds, woItems, opt)` 於 `bLog` 為真(預設)時預設只輸出 `{ n: 筆數 }`(非真陣列為 `null`)而不列資料列；`getSettings(opt)` 設定檔無效時預設只輸出已知設定鍵名與未知鍵的個數 `{ keys, nOther }`，不傾印設定值(含資料庫帳號與密碼)，讀取或解析錯誤(可含檔案路徑)預設只列錯誤類別。
-* 使用端建議：**w-web-* 等會把行程標準輸出交給 pm2 或容器收集的服務，建議以 `opt.funLog` 接管**，把 `safe` 轉送自己的 log(需要細節時由使用端自行遮罩 `detail` 中的主鍵與 `err` 再轉送)；不需要細節者不傳任何選項即可，預設已不含個資。已知差異：`procOrm` 逐筆失敗的 **reject 訊息**(如 `failed to save data: id[...]`)與 `recover`、`genTestData` 拋出的 `Error` 訊息(含 ORM 回傳原文)是回傳契約，不受本節影響，仍會隨 reject 交給呼叫端，使用端須自行處理其落地。
+* 工具路徑同樣處理，選項寫在各函數既有的 `opt`，**型別錯誤者忽略並用預設**(與同處的 `bLog` 一致)：`getDb.backup(woItems, opt)`、`getDb.recover(woItems, fp, opt)` 失敗時預設只輸出 `{ errType }`(`logDetail` 為 `true` 時為 `console.log('backup catch'或'recover catch', 細節)`)；`getDb.recover` 的 `bRela` 路徑傾印 schema 預設只列表名 `{ n, tables }`；`WServOrm(...)` 實例上的 `backup(woItems)`、`recover(fp, woItems, genModels, needCreateStorage)` 參數不變(各實例的函數身分不同)，診斷輸出依該實例的 `opt`；`genTestData(ds, woItems, opt)` 於 `bLog` 為真(預設)時預設只輸出 `{ n: 筆數 }`(非真陣列為 `null`)而不列資料列；`getSettings(opt)` 設定檔無效時預設只輸出已知設定鍵名與未知鍵的個數 `{ keys, nOther }`，不傾印設定值，`logDetail`/`funLog` 之細節中之資料庫帳號、密碼與連線網址遮罩(秘密由讀入之設定導出)，讀取或解析錯誤(可含檔案路徑)預設只列錯誤類別。工具路徑(`getDb`、`genTestData`)無連線網址可宣告，其細節與對外錯誤值只依 wsemi 之網址帳密、憑證鍵值對與 Bearer 樣式遮罩；實例上之 `backup`、`recover` 依該實例之 `url`。
+* 使用端建議：**w-web-* 等會把行程標準輸出交給 pm2 或容器收集的服務，建議以 `opt.funLog` 接管**，伺服端以 wsemi `genDiagFunLog(write)` 之 `funLog` 傳入即只寫安全摘要(`{ event: 'orm-diag', label, safe }`，不取細節)；不需要細節者不傳任何選項即可，預設已不含個資。已知差異：`procOrm` 逐筆失敗的 **reject 訊息**(如 `failed to save data: id[...]`)列主鍵(識別值，回傳契約)，仍會隨 reject 交給呼叫端，使用端須自行處理其落地。
+
+### 對外錯誤值(reject、throw)不含連線憑證
+
+* **外來值**(ORM、檔案系統、ORM 建構子、擴充函數〔check、前處理、後處理〕、`genTestData` 之 `funTest`/`funTestAndSave`/`hookFunTestData`、`recover` 之模型產生器拋出或 reject 之值)於本套件之 catch 站點經 wsemi `diag.err`：含本實例連線憑證(連線字串整串、密碼、`帳:密`、查詢參數之秘密值等)、網址帳密或憑證鍵值對者，改為**同類別之副本**(`instanceof` 與 `code` 等自有屬性保留，訊息之憑證為 `***`，呼叫端原物件不被改動)；無須處理者回**原物件**(身分不變)。只遮憑證：單獨帳號、儲存路徑(`err.path`)、主鍵等識別值不遮。
+* **本套件以固定詞彙組成之 reject 與 throw 一律原樣**(如 `failed to save data`、`failed to save data: id[...]`、`rowNotFound`、`invalid woItems`、`addFunCheck needs a function, but got ...`)：即使密碼為其子字串也不挖空(挖空會反推短密碼)。`procOrm` 之 ORM 錯誤本即只以固定字串轉出，不受影響。
+* 工具路徑之失敗訊息(`recover` 之 `failed to recover data into table[表名]: ...`、`genTestData` 之 `failed to write test data into table[表名]: ...`)只對其中 ORM 回傳原文(含逐筆 `err`)之段經 wsemi `diag.mask`，固定前綴與表名原樣。
+* `withTabLocks` 之 `fn` 與 `guardWrite` 之 `read`、`write` 之 reject 原樣轉出(其多為 `procOrm` 之固定詞彙，須原樣供 `getRejectKey` 判讀)。
+
+## Breaking changes
+
+* **2026-10-29(診斷輸出改用 wsemi 共用模組;wsemi ≥ 1.9.31)**：
+  * `opt.logDetail`、`opt.funLog` 之細節**開始遮罩連線憑證**(舊版原樣，含 `getSettings` 之 `dbPassword`)，且一律為拷貝(舊版部分站點交 `funLog` 原參照)；拷貝不再沿用使用端之原型(類別實例之副本為一般物件，錯誤之副本為內建錯誤類別)，形態標記依 wsemi `maskDiagCopy`(如 `Promise` 為 `[Promise]`、無法讀取之 `stack` 為 `[Stack unavailable]`)。
+  * `logDetail` 之輸出一律為 `console.log(標籤, 細節)`：舊版 `getDb.backup`/`getDb.recover` 失敗、`getSettings` 讀取失敗之 `console.log(err)`(無標籤)改為帶標籤(`backup catch`、`recover catch`、`getSettings catch`)。
+  * 摘要 `safe` 之形狀：備份還原進度由表名字串改為 `{ table: 表名 }`；`data has unsupported key`、`same id across steps` 由訊息陣列改為 `{ msgs: [...] }`；白名單外之鍵丟棄。
+  * `errType` 只列內建錯誤類別名(驅動之類別名如 `MongoServerError` 改為 `Error`)；`errCode` 由樣式白名單改為 wsemi 明列之代碼集合(未明列之整數與字串不再列出，如 `ERR_DUP_KEY`、`987654321`)。
+  * 對外錯誤值：外來值含本實例之連線憑證者改為副本(見上節)；含憑證之擴充函數 reject、ORM 之 `close`/建構錯誤、`backup`/`recover`/`genTestData` 之外來錯誤，其訊息之憑證為 `***`。`recover`、`genTestData` 失敗訊息中之 ORM 回傳原文經遮罩。
+  * 移除 `src/getDiag.mjs`(`getOptLog`、`getOptLogLoose`、`getDiag`、`getBriefErr`、`cpDetail` 等)；摘要函數 `getBriefFails`、`getBriefResult`、`getBriefType`、`getBriefCount` 移至 `src/getDiagBrief.mjs`。直接使用 `getMapOrm(ds, woItems, opt)` 者之 `opt.logDetail`/`opt.funLog` 型別錯誤不再拋錯(依 wsemi `getDiag` 之寬鬆讀取；型別檢核留在 `WServOrm` 建構子)。
 
 ## Concurrent editing (write contract, withTabLocks, guardWrite, mustExist, keepUserId)
 供「多位使用者可同時編輯、且可能開著舊畫面存檔」之後台使用：舊畫面存檔整次拒收(先動先贏、零寫入)，看著最新資料改者與不帶基準之寫入(外部同步、外部應用)照常寫入，已刪之列不復活，不部分寫入。規格見 opensrcOper 之 `dspec/多人同時編輯之寫入契約.md`；以下為本套件提供之部分。

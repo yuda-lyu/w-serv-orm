@@ -14,14 +14,14 @@
   3. **P3(預設不變)**: 未給 `opt`、`opt` 為 `null`/`{}`、`onTrace` 為非函數、被 `Array.prototype.forEach` 等多帶參數(索引、陣列)呼叫者,行為與舊版相同(`unit-hookTrace` HT04);改造前測試原樣對新 src 全數通過(見 tm-servorm 報告).
   4. **P4(回調不得影響被測函數)**: 回調同步呼叫、不帶接收者;拋錯(含試圖改寫凍結事件之 `TypeError`)與回傳之 rejection 一律忽略,不影響註冊與 `procOrm`(`unit-hookTrace` HT05-HT08).
   5. **測試以事件同步**: 註冊擴充函數後須等其生效者一律經 `test/tools/hookKit.mjs` 之 `addHook(so, name, f)`(回傳 Promise,於 `active` 事件 resolve);註冊失敗(非函數)之否定觀察以 `settle(so)`(註冊無作用 check 並等其生效,同為 1ms 計時器依註冊先後生效)為屏障;防懸置上限(10 秒)用模組載入時保存之真實計時器,只防永不生效,不是同步點.**不得以 `wait(N)` 等固定毫秒等待擴充函數生效**.盤點指令(Grep): `await wait\(` 於 `test/*.test.mjs`,剩餘者須皆為 A 類(見下).
-  6. **效能時限類(P6)**: 「處理量有界(不展開指數個物件、不依 `length` 迭代、原型鏈成本有界)」之斷言一律以**本行程 CPU 時間**(`process.cpuUsage`,user+system)而非牆鐘時間(`Date.now()` 差),經 `test/tools/cpuBound.mjs` 之 `cpuMs`/`cpuMsSync` 集中量測;裕度(CPU 毫秒)與各案見下表.理由: 牆鐘含行程被排程器擱置(CPU 壓力、他套件測試)之時間,與工作量無關;CPU 時間不含擱置而工作量失控時仍成比例增長.量測區間須只含微任務(不讓出給他人回呼之巨任務),否則同行程他人之 CPU 耗用亦計入.不得以重試掩蓋.環境變數 `SERVORM_CPUBOUND_LOG`(檔案路徑)給予時每次量測追加一行 JSON(`label`、`cpu`、`wall`),供訂定裕度.
+  6. **效能時限類(P6)**: 「處理量有界(不展開指數個物件、不依 `length` 迭代、原型鏈成本有界)」之斷言一律以**本行程 CPU 時間**(`process.cpuUsage`,user+system)而非牆鐘時間(`Date.now()` 差),經 `test/tools/cpuBound.mjs` 之 `cpuMs` 集中量測(同步版 `cpuMsSync` 之唯一使用者 O14f 已於 2026-10-29 mig-servorm 隨 `cpDetail` 刪除而移除);裕度(CPU 毫秒)與各案見下表.理由: 牆鐘含行程被排程器擱置(CPU 壓力、他套件測試)之時間,與工作量無關;CPU 時間不含擱置而工作量失控時仍成比例增長.量測區間須只含微任務(不讓出給他人回呼之巨任務),否則同行程他人之 CPU 耗用亦計入.不得以重試掩蓋.環境變數 `SERVORM_CPUBOUND_LOG`(檔案路徑)給予時每次量測追加一行 JSON(`label`、`cpu`、`wall`),供訂定裕度.
 
 ## 本套件之處理清單(tm-servorm 實施時讀碼確認;與 timer-inv01 明細表之差異見報告)
 
 | 類 | 案(檔) | 處理 |
 |---|---|---|
 | C(擴充函數生效) | `unit-WServOrm`: I05、I06、I08、I09、H01、K01-K07;`unit-guard`: M12b、M14、M14b;`unit-keepuser`: K12、K13;`unit-objcopy`: L05、D03;`unit-pkcast`: N09(共 20 案;明細表原列 13 案) | 改等 `addHook` 之 `active` 事件;I09、K05 之「呼叫進行中」步間改等擴充函數自身進入之 Promise;K06、K07 之否定觀察改 `settle` 屏障 |
-| (d) 效能時限 | `api-objcopy`: A28;`unit-diaglog`: O14f;`unit-objcopy`: L02、S04、S06、S13(共 6 案;明細表原列 5 案,S04 為讀碼新增) | 改 CPU 時間斷言,裕度見下 |
+| (d) 效能時限 | `api-objcopy`: A28;`unit-objcopy`: L02、S04、S06、S13(現 5 案;原另有 `unit-diaglog` O14f,2026-10-29 mig-servorm 隨 `cpDetail` 改由 wsemi 共用語料 S10 驅動而刪除;明細表原列 5 案,S04 為讀碼新增) | 改 CPU 時間斷言,裕度見下 |
 | A(不改) | `unit-guard`/`api-guard` 之 fixture 延遲(`wait(30/40/60/80/150/250)`)與步間 `wait(10/15/20)`(鎖之取得由 Promise 微任務序保證,不受計時器延遲影響);`api-guard` R03/R04/R09/R10 之 `wait(5)`(令 `timeUpdate` 時間戳相異,時間是資料);`unit-diaglog` O03/O09 之 `wait(20/30)`(`unhandledRejection` 否定觀察窗) | 不改 |
 
 ## 效能時限類之裕度(CPU 毫秒;依負載試驗實測最大值訂定)
@@ -36,7 +36,7 @@
 | S06 指數型 DAG(`unit-objcopy`) | 1000 | 16 | 9 | 62 倍 |
 | S13 20 萬層原型鏈(`unit-objcopy`) | 1000 | 376 | 303 | 2.7 倍(最小,建構 20 萬層鏈本身耗時;若日後轉紅先查機器狀態再議) |
 | S13 共用長鏈 2 萬次(`unit-objcopy`) | 3000 | 188 | 209 | 16 倍 |
-| O14f `cpDetail` 寬/稀疏/大物件(`unit-diaglog`) | 5000 | 281 | 271 | 18 倍 |
+| O14f `cpDetail` 寬/稀疏/大物件(`unit-diaglog`;**2026-10-29 已刪除**,細節拷貝之有界由 wsemi 語料 S10 驗證) | 5000 | 281 | 271 | 18 倍 |
 
 (`process.cpuUsage` 於 Windows 之粒度約 15.6 ms,故小值呈 0 或 16;CPU 時間含 GC 等其他執行緒,可略大於牆鐘.)
 

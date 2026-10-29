@@ -9,7 +9,7 @@ import WServOrm from '../src/WServOrm.mjs'
 
 
 //R-DIAG-01(orm-run01): 工具路徑(getDb 的 backup 與 recover、WServOrm 實例上的 recover、genTestData、getSettings)之診斷輸出同 procOrm:
-//預設不含資料列、主鍵與ORM錯誤原文(getSettings 另不含資料庫帳號與密碼), opt.logDetail 為 true 還原完整輸出, opt.funLog 取代 console 並收完整細節; Error 的訊息與 reject 契約不變
+//預設不含資料列、主鍵與ORM錯誤原文(getSettings 另不含資料庫帳號與密碼), opt.logDetail 為 true 輸出細節, opt.funLog 取代 console 並收細節; 細節一律為 wsemi 之遮罩拷貝(憑證遮罩, 2026-10-29 mig-servorm); Error 的訊息與 reject 契約不變
 let SECRET = 'u-secret@example.com'
 let ERRTXT = 'E-raw-9f3a duplicate key'
 let PASS = 'p4ss-W0rd-secret'
@@ -93,10 +93,11 @@ describe('工具路徑之診斷輸出(R-DIAG-01)', function() {
                 await getReject(getDb.recover(mkWoItems(results), fp(), { bLog: false, logDetail: true }))
             })
             assert.strict.deepEqual(cap.calls.find((a) => a[0] === 't2.insert fail').slice(1), [detail])
-            //還原舊輸出: 舊版為console.log(err), 即單一引數之Error(外審 terra F14)
+            //wsemi之getDiag(dspec〈診斷輸出與遮罩〉§3.2.1第4點): bare已刪除, logDetail且有細節者一律為console.log(標籤, 遮罩後之細節拷貝)
             let eCall = cap.calls[cap.calls.length - 1]
-            assert.strict.equal(eCall.length, 1)
-            assert.ok(eCall[0] instanceof Error && eCall[0].message.startsWith('failed to recover data into table[t2]: '))
+            assert.strict.equal(eCall.length, 2)
+            assert.strict.equal(eCall[0], 'recover catch')
+            assert.ok(eCall[1] instanceof Error && eCall[1].message.startsWith('failed to recover data into table[t2]: '))
             let fun = []
             let cap2 = await capture(async () => {
                 await getReject(getDb.recover(mkWoItems(results), fp(), { bLog: false, funLog: (...a) => fun.push(a) }))
@@ -141,7 +142,7 @@ describe('工具路徑之診斷輸出(R-DIAG-01)', function() {
                 await soB.backup(mkWoItems())
             })
             assert.strict.deepEqual(capB.calls, [])
-            assert.strict.deepEqual(funB.map((a) => a.slice(0, 2)), [['backup...', 't1'], ['backup...', 't2']])
+            assert.strict.deepEqual(funB.map((a) => a.slice(0, 2)), [['backup...', { table: 't1' }], ['backup...', { table: 't2' }]]) //safe須為純物件(wsemi之safe正規化), 表名以table鍵列出
         })
 
     }
@@ -159,8 +160,8 @@ describe('工具路徑之診斷輸出(R-DIAG-01)', function() {
         let capDet = await capture(async () => {
             await getReject(getDb.backup(woItems, { bLog: false, logDetail: true }))
         })
-        assert.strict.equal(capDet.calls[capDet.calls.length - 1].length, 1) //舊版為console.log(err), 單一引數(外審 terra F14)
-        assert.ok(capDet.calls[capDet.calls.length - 1][0] instanceof Error)
+        assert.strict.equal(capDet.calls[capDet.calls.length - 1].length, 2) //bare已刪除: console.log(標籤, 細節拷貝)
+        assert.ok(capDet.calls[capDet.calls.length - 1][1] instanceof Error)
         let fun = []
         await capture(async () => {
             await getReject(getDb.backup(woItems, { bLog: false, funLog: (...a) => fun.push(a) }))
@@ -239,9 +240,12 @@ describe('工具路徑之診斷輸出(R-DIAG-01)', function() {
                 err = e
             }
         })
-        assert.strict.deepEqual(capDet.calls[0][1].dbPassword, PASS)
-        assert.strict.equal(capDet.calls[1].length, 1) //舊版為console.log(err)
-        assert.ok(capDet.calls[1][0] instanceof Error)
+        //logDetail之細節開始遮罩憑證(dspec〈診斷輸出與遮罩〉D2、§4 serv-orm: 秘密以函數形式由讀入之設定導出): 密碼與帳號皆不出現, 其餘鍵值保留
+        assert.ok(!capDet.text.includes(PASS) && !capDet.text.includes('admin'), capDet.text)
+        assert.strict.deepEqual(capDet.calls[0], ['st', { dbType: 'mongodb', dbUsername: '***', dbPassword: '***', dbIP: 'localhost', dbPort: 27017 }])
+        assert.strict.equal(capDet.calls[1].length, 2) //bare已刪除: console.log(標籤, 細節拷貝)
+        assert.strict.equal(capDet.calls[1][0], 'getSettings catch')
+        assert.ok(capDet.calls[1][1] instanceof Error)
     })
 
     it('T08b getSettings之摘要只列已知鍵: 設定檔之未知鍵(部署者自撰, 可能為識別)只計數不列出', async function() {
@@ -340,18 +344,20 @@ describe('工具路徑之診斷輸出(R-DIAG-01)', function() {
             assert.ok(!cap.text.includes(SECRET) && !cap.text.includes(PASS), `${label}: ${cap.text}`)
             assert.strict.deepEqual(cap.calls.find((a) => a[0] === label), [label, safe], label)
         }
-        //logDetail還原舊輸出(標籤接原值)
+        //logDetail: 標籤接遮罩後之細節拷貝(憑證鍵名password之值整體***, wsemi之maskDiagCopy)
+        let urlMasked = { host: 'h', password: '***' }
         let capDet = await capture(async () => {
             await Promise.resolve().then(() => WServOrm({ t: {} }, WOrmOk, urlObj, 'd', { logDetail: true })).catch(() => {})
         })
-        assert.strict.deepEqual(capDet.calls, [['url', urlObj]])
-        //funLog: console無輸出, 收型別摘要與原值
+        assert.strict.deepEqual(capDet.calls, [['url', urlMasked]])
+        //funLog: console無輸出, 收型別摘要與遮罩後之細節拷貝
         let fun = []
         let capFun = await capture(async () => {
             await Promise.resolve().then(() => WServOrm({ t: {} }, WOrmOk, urlObj, 'd', { funLog: (...a) => fun.push(a) })).catch(() => {})
         })
         assert.strict.deepEqual(capFun.calls, [])
-        assert.strict.deepEqual(fun, [['url', { type: 'object' }, urlObj]])
+        assert.strict.deepEqual(fun, [['url', { type: 'object' }, urlMasked]])
+        assert.ok(fun[0][2] !== urlObj && urlObj.password === PASS, 'diag一律拷貝, 不改動呼叫端物件')
     })
 
     it('T12 genTestData之bLog摘要不讀取回傳物件之屬性: 非真陣列者筆數為null, 不因length之getter而拋錯或印出', async function() {
@@ -393,7 +399,7 @@ describe('工具路徑之診斷輸出(R-DIAG-01)', function() {
             await getDb.recover(woItemsR, fpR, optR)
         })
         assert.ok(!cap.text.includes(SECRET), cap.text)
-        assert.strict.deepEqual(cap.calls, [['tabs', { n: 1, tables: ['tests'] }], ['recover...', 'tests'], ['needCreateStorage'], ['recover finish']])
+        assert.strict.deepEqual(cap.calls, [['tabs', { n: 1, tables: ['tests'] }], ['recover...', { table: 'tests' }], ['needCreateStorage'], ['recover finish']])
         let capDet = await capture(async () => {
             await getDb.recover(woItemsR, fpR, { ...optR, logDetail: true })
         })

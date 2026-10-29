@@ -4,13 +4,13 @@ import util from 'util'
 import assert from 'assert'
 import WServOrm from '../src/WServOrm.mjs'
 import getMapOrm from '../src/getMapOrm.mjs'
-import { getDiag, getBriefResult, getOptLogLoose, cpDetail } from '../src/getDiag.mjs'
-import { cpuMsSync } from './tools/cpuBound.mjs'
+import { getBriefResult } from '../src/getDiagBrief.mjs'
 
 
-//R-DIAG-01(orm-run01, 來源: w-web-perm 建議書 Gitea #12): procOrm各路徑之診斷輸出預設不含主鍵、資料值與ORM錯誤原文,
-//opt.logDetail為true還原完整細節, opt.funLog(label, safe, detail)取代console並收完整細節; 回傳契約(resolve與reject)不因選項而變
-//替身ORM的失敗皆夾帶 SECRET(使用者識別, 含email)與 ERRTXT(ORM錯誤原文), 預設輸出出現任一即為洩漏
+//R-DIAG-01(orm-run01, 來源: w-web-perm 建議書 Gitea #12; 2026-10-29 mig-servorm 改用wsemi之getDiag系列): procOrm各路徑之診斷輸出預設不含主鍵、資料值與ORM錯誤原文,
+//opt.logDetail為true輸出細節, opt.funLog(label, safe, detail)取代console並收細節(細節一律為wsemi之遮罩拷貝); 回傳契約(resolve與reject)不因選項而變
+//本檔為接線測試(每個診斷站點經真實呼叫點執行); 遮罩、拷貝、摘要之形態由wsemi之共用語料驅動(見unit-diaglog-wire)
+//替身ORM的失敗皆夾帶 SECRET(使用者識別, 含email)與 ERRTXT(ORM錯誤原文), 預設輸出出現任一即為洩漏(兩者皆非憑證, 細節中不遮)
 let SECRET = 'u-secret@example.com'
 let ERRTXT = 'E-raw-9f3a duplicate key'
 let DS = { tests: { keys: ['id', 'name'] } }
@@ -134,12 +134,12 @@ let PATHS = [
     { id: 'P31', title: 'mix之diff的adjustData拋錯', mode: 'mix', input: () => ({ diff: ROWS() }), ds: { tests: {} }, plan: {}, reject: 'failed to adjust data', label: 'tests.adjustData catch', safe: { errType: 'TypeError' }, detail: isStr(/^TypeError: /), leak: false },
     //只有位置或固定句型(本就不含主鍵與原文): 仍經同一出口, 供funLog收到
     { id: 'P32', title: 'save之列不是物件', mode: 'save', input: () => ['str'], plan: {}, reject: 'failed to save data, not an object: data[0]', label: 'tests.save data is not an object', safe: { n: 1, ks: [0] }, detail: [[{ k: 0 }]], leak: false },
-    { id: 'P33', title: 'save之列含自有__proto__鍵', mode: 'save', input: () => [JSON.parse(`{"__proto__":1,"id":"${SECRET}"}`)], plan: {}, reject: 'failed to save data, unsupported key[__proto__]: data[0]', label: 'tests.save data has unsupported key', safe: (rej) => [rej], detail: (args, rej) => assert.strict.deepEqual(args, [[rej]]), leak: false },
+    { id: 'P33', title: 'save之列含自有__proto__鍵', mode: 'save', input: () => [JSON.parse(`{"__proto__":1,"id":"${SECRET}"}`)], plan: {}, reject: 'failed to save data, unsupported key[__proto__]: data[0]', label: 'tests.save data has unsupported key', safe: (rej) => ({ msgs: [rej] }), detail: (args, rej) => assert.strict.deepEqual(args, [[rej]]), leak: false },
     { id: 'P34', title: 'save之批次容器有空洞', mode: 'save', input: () => new Array(2), plan: {}, reject: 'failed to save data, unsupported sparse array: data[0]', label: 'tests.save invalid batch container', safe: undefined, detail: undefined, leak: false },
     { id: 'P35', title: 'save之mustExist查無該列', mode: 'save', input: ROWS, opt: { mustExist: true }, plan: {}, reject: 'rowNotFound', label: 'tests.save row not found', safe: undefined, detail: undefined, leak: false },
     { id: 'P36', title: 'del之mustExist同批重複主鍵', mode: 'del', input: () => [{ id: SECRET }, { id: SECRET }], opt: { mustExist: true }, plan: {}, reject: 'invalid input of del, duplicate id: data[1]', label: 'tests.del duplicate id', safe: { n: 1, ks: [1] }, detail: [[{ k: 1 }]], leak: false },
     { id: 'P37', title: 'del之mustExist查無該列', mode: 'del', input: ROWS, opt: { mustExist: true }, plan: {}, reject: 'rowNotFound', label: 'tests.del row not found', safe: undefined, detail: undefined, leak: false },
-    { id: 'P38', title: 'mix之add同批含同鍵於add與del', mode: 'mix', input: () => ({ add: [{ id: SECRET, name: 'a' }], del: [{ id: SECRET }] }), plan: {}, reject: 'invalid input of mix, same id in add and del: add[0], del[0]', label: 'tests.mix same id across steps', safe: (rej) => [rej], detail: (args, rej) => assert.strict.deepEqual(args, [[rej]]), leak: false },
+    { id: 'P38', title: 'mix之add同批含同鍵於add與del', mode: 'mix', input: () => ({ add: [{ id: SECRET, name: 'a' }], del: [{ id: SECRET }] }), plan: {}, reject: 'invalid input of mix, same id in add and del: add[0], del[0]', label: 'tests.mix same id across steps', safe: (rej) => ({ msgs: [rej] }), detail: (args, rej) => assert.strict.deepEqual(args, [[rej]]), leak: false },
     //事後偵測與其餘輸入檢查(外審 terra F17: 路徑表須涵蓋src全部診斷站點, S03機械比對)
     { id: 'P39', title: 'save之mustExist事後偵測未命中', mode: 'save', input: ROWS, opt: { mustExist: true }, plan: { select: () => [{ id: SECRET }], save: (d) => d.map(() => ({ n: 0, ok: 1 })) }, reject: 'rowNotFound', label: 'tests.save row not found after check', safe: undefined, detail: undefined, leak: false },
     { id: 'P40', title: 'del之批次容器有空洞', mode: 'del', input: () => new Array(2), plan: {}, reject: 'failed to delete data, unsupported sparse array: data[0]', label: 'tests.del invalid batch container', safe: undefined, detail: undefined, leak: false },
@@ -147,11 +147,11 @@ let PATHS = [
     { id: 'P42', title: 'mix之add批次容器有空洞', mode: 'mix', input: () => ({ add: new Array(2) }), plan: {}, reject: 'failed to insert data, unsupported sparse array: data[0]', label: 'tests.mix invalid batch container', safe: undefined, detail: undefined, leak: false },
     { id: 'P43', title: 'mix之add列不是物件', mode: 'mix', input: () => ({ add: ['str'] }), plan: {}, reject: 'failed to insert data, not an object: data[0]', label: 'tests.mix add data is not an object', safe: { n: 1, ks: [0] }, detail: [[{ k: 0 }]], leak: false },
     { id: 'P44', title: 'mix之diff列不是物件', mode: 'mix', input: () => ({ diff: ['str'] }), plan: {}, reject: 'failed to update data, not an object: data[0]', label: 'tests.mix diff data is not an object', safe: { n: 1, ks: [0] }, detail: [[{ k: 0 }]], leak: false },
-    { id: 'P45', title: 'mix之add列含自有__proto__鍵', mode: 'mix', input: () => ({ add: [JSON.parse(`{"__proto__":1,"id":"${SECRET}"}`)] }), plan: {}, reject: 'failed to insert data, unsupported key[__proto__]: data[0]', label: 'tests.mix data has unsupported key', safe: (rej) => [rej], detail: (args, rej) => assert.strict.deepEqual(args, [[rej]]), leak: false },
+    { id: 'P45', title: 'mix之add列含自有__proto__鍵', mode: 'mix', input: () => ({ add: [JSON.parse(`{"__proto__":1,"id":"${SECRET}"}`)] }), plan: {}, reject: 'failed to insert data, unsupported key[__proto__]: data[0]', label: 'tests.mix data has unsupported key', safe: (rej) => ({ msgs: [rej] }), detail: (args, rej) => assert.strict.deepEqual(args, [[rej]]), leak: false },
     { id: 'P46', title: 'mix之del列的id為繼承而來', mode: 'mix', input: () => ({ del: [Object.create({ id: SECRET })] }), plan: {}, reject: 'failed to delete data, unsupported irregular object or array: data[0]', label: 'tests.mix del id is not an own data property', safe: { n: 1, ks: [0] }, detail: [[{ k: 0 }]], leak: false },
     { id: 'P47', title: 'mix之diff主鍵含HTML標記', mode: 'mix', input: () => ({ diff: [{ id: `${SECRET}<b`, name: 'a' }] }), plan: {}, reject: 'failed to update data, id contains HTML markup: data[0]', label: 'tests.mix diff id changed by clearXSS', safe: { n: 1, ks: [0] }, detail: [[{ k: 0, id: `${SECRET}<b` }]], leak: true },
     { id: 'P48', title: 'insert之列不是物件', mode: 'insert', input: () => ['str'], plan: {}, reject: 'failed to insert data, not an object: data[0]', label: 'tests.insert data is not an object', safe: { n: 1, ks: [0] }, detail: [[{ k: 0 }]], leak: false },
-    { id: 'P49', title: 'insert之列含自有__proto__鍵', mode: 'insert', input: () => [JSON.parse(`{"__proto__":1,"id":"${SECRET}"}`)], plan: {}, reject: 'failed to insert data, unsupported key[__proto__]: data[0]', label: 'tests.insert data has unsupported key', safe: (rej) => [rej], detail: (args, rej) => assert.strict.deepEqual(args, [[rej]]), leak: false },
+    { id: 'P49', title: 'insert之列含自有__proto__鍵', mode: 'insert', input: () => [JSON.parse(`{"__proto__":1,"id":"${SECRET}"}`)], plan: {}, reject: 'failed to insert data, unsupported key[__proto__]: data[0]', label: 'tests.insert data has unsupported key', safe: (rej) => ({ msgs: [rej] }), detail: (args, rej) => assert.strict.deepEqual(args, [[rej]]), leak: false },
     { id: 'P50', title: 'insert之主鍵含HTML標記', mode: 'insert', input: () => [{ id: `${SECRET}<b`, name: 'a' }], plan: {}, reject: 'failed to insert data, id contains HTML markup: data[0]', label: 'tests.insert id changed by clearXSS', safe: { n: 1, ks: [0] }, detail: [[{ k: 0, id: `${SECRET}<b` }]], leak: true },
     { id: 'P51', title: 'insert之adjustData拋錯', mode: 'insert', input: ROWS, ds: { tests: {} }, plan: {}, reject: 'failed to adjust data', label: 'tests.adjustData catch', safe: { errType: 'TypeError' }, detail: isStr(/^TypeError: /), leak: false },
     { id: 'P52', title: 'insert之批次容器有空洞', mode: 'insert', input: () => new Array(2), plan: {}, reject: 'failed to insert data, unsupported sparse array: data[0]', label: 'tests.insert invalid batch container', safe: undefined, detail: undefined, leak: false },
@@ -212,11 +212,11 @@ describe('診斷輸出預設不含主鍵與錯誤原文(R-DIAG-01)', function() 
 })
 
 
-describe('opt.logDetail為true還原完整細節(R-DIAG-01)', function() {
+describe('opt.logDetail為true輸出細節(R-DIAG-01)', function() {
 
     for (let p of PATHS) {
-        it(`${p.id} ${p.title}: 還原為舊版輸出, reject值不變`, async function() {
-            //R-DIAG-01 規則3: logDetail為true時console輸出同舊版(標籤接完整細節)
+        it(`${p.id} ${p.title}: 標籤接細節之拷貝, reject值不變`, async function() {
+            //R-DIAG-01 規則3: logDetail為true時console輸出標籤接細節(wsemi之遮罩拷貝; 本表之細節不含憑證, 故內容同舊版)
             let r = await runPath(p, { logDetail: true })
             assert.strict.equal(r.reject, p.reject)
             assert.strict.equal(r.calls.length, 1)
@@ -231,11 +231,11 @@ describe('opt.logDetail為true還原完整細節(R-DIAG-01)', function() {
 })
 
 
-describe('opt.funLog收完整細節並取代console(R-DIAG-01)', function() {
+describe('opt.funLog收細節並取代console(R-DIAG-01)', function() {
 
     for (let p of PATHS) {
         it(`${p.id} ${p.title}: funLog收(標籤, 摘要, 細節), console無輸出, reject值不變`, async function() {
-            //R-DIAG-01 規則3: 注入之紀錄函式收到完整細節供使用端遮罩或轉送; 給予時本套件不寫console
+            //R-DIAG-01 規則3: 注入之紀錄函式收到細節(遮罩拷貝)供使用端轉送; 給予時本套件不寫console
             let r = await runPath(p, { funLog: true })
             assert.strict.equal(r.reject, p.reject)
             assert.strict.deepEqual(r.calls, [], `console應無輸出: ${r.text}`)
@@ -395,73 +395,6 @@ describe('診斷選項之建構與行為(R-DIAG-01)', function() {
         assert.strict.deepEqual(cap2.calls, [['tests.save fail', [{ k: 0, id: SECRET, err: ERRTXT }]]])
     })
 
-    it('O07 摘要之錯誤類別與代碼只取白名單樣式, 不帶訊息文字', async function() {
-        //R-DIAG-01 規則2: ORM錯誤物件的name與code若不是類別名稱與大寫代碼, 不列入; Proxy不被探測
-        class MongoServerError extends Error {}
-        let e1 = new MongoServerError(`${ERRTXT} ${SECRET}`)
-        e1.code = 11000
-        let e2 = new Error(ERRTXT)
-        e2.name = SECRET //name不是類別名稱樣式
-        e2.code = SECRET //code不是大寫代碼樣式
-        let e3 = new Error(ERRTXT)
-        e3.code = 'ERR_DUP_KEY'
-        let trap = throwErr('trap')
-        let e4 = new Proxy(new Error(ERRTXT), { get: trap, getOwnPropertyDescriptor: trap })
-        let e5 = {
-            message: `${ERRTXT} ${SECRET}`,
-            get code() {
-                throw new Error('getter')
-            },
-        }
-        //外審 terra F04: 樣式合格不等於安全, 代碼只放行機器代碼樣式(ENOENT、ERR_xxx、SQLSTATE 5碼、小整數), 類別只取建構子名稱(name可被改)
-        let mkCode = (c) => {
-            let e = new Error(ERRTXT)
-            e.code = c
-            return e
-        }
-        let e6 = mkCode('ALICE123') //大寫的使用者識別
-        let e7 = mkCode(987654321) //數字主鍵
-        let e8 = mkCode('ENOENT')
-        let e9 = mkCode('23505')
-        let e10 = new Error(ERRTXT)
-        e10.name = 'MongoServerError' //name被改, 不採用
-        let e11 = mkCode('ALICE') //5碼大寫之使用者識別: 前2碼不是SQLSTATE已知類別(外審 terra R2-01)
-        let e12 = mkCode('22P02') //SQLSTATE(類別22)
-        let got = []
-        //收到的摘要先轉為純資料再比對: 摘要若誤含原錯誤物件(Proxy、getter), 斷言失敗時格式化差異不得因此拋錯而掩蓋失敗
-        let plain = (s) => {
-            try {
-                return JSON.parse(JSON.stringify(s))
-            }
-            catch (e) {
-                return '(unserializable)'
-            }
-        }
-        for (let e of [e1, e2, e3, e4, e5, e6, e7, e8, e9, e10, e11, e12, 12345, null, undefined, Symbol('x')]) {
-            let so = WServOrm(DS, mkWOrm({ raw: { save: () => Promise.reject(e) } }), 'url', 'db', { funLog: (label, safe) => got.push(plain(safe)) })
-            await getReject(so.procOrm('u1', 'tests', 'save', ROWS()))
-        }
-        assert.strict.deepEqual(got, [
-            { errType: 'MongoServerError', errCode: 11000 },
-            { errType: 'Error' },
-            { errType: 'Error', errCode: 'ERR_DUP_KEY' },
-            { errType: 'Proxy' },
-            { errType: 'object' },
-            { errType: 'Error' },
-            { errType: 'Error' },
-            { errType: 'Error', errCode: 'ENOENT' },
-            { errType: 'Error', errCode: '23505' },
-            { errType: 'Error' },
-            { errType: 'Error' },
-            { errType: 'Error', errCode: '22P02' },
-            { errType: 'number' },
-            { errType: 'null' },
-            { errType: 'undefined' },
-            { errType: 'symbol' },
-        ])
-        assert.ok(!JSON.stringify(got).includes(SECRET) && !JSON.stringify(got).includes(ERRTXT))
-    })
-
     it('O08 紀錄函式原地改動(遮罩、清空、追加)收到的摘要與細節: 全部路徑之reject值不變', async function() {
         //R-DIAG-01 規則4(外審 terra F08): 常見的原地遮罩logger不得改變reject訊息; 交出的是拷貝, 且reject訊息先於診斷輸出組出
         let scramble = (v, depth = 0) => {
@@ -500,70 +433,6 @@ describe('診斷選項之建構與行為(R-DIAG-01)', function() {
             let so = WServOrm(p.ds || DS, mkWOrm(p.plan), 'url', 'db', { funLog })
             let rej = await getReject(so.procOrm('u1', 'tests', p.mode, p.input(), p.opt))
             assert.strict.equal(rej, p.reject, p.id)
-        }
-    })
-
-    it('O09 紀錄函式回傳帶throwing then getter之rejected promise、回傳thenable: 無未處理拒絕, reject值不變', async function() {
-        //R-DIAG-01 規則4(外審 terra F09): 原生promise以內建then附處理(不讀可被覆寫之then屬性); 其他thenable只讀一次then並處理其回傳之promise
-        let unhandled = []
-        let h = (e) => {
-            unhandled.push(e)
-        }
-        process.on('unhandledRejection', h)
-        try {
-            let p6 = PATHS.find((v) => v.id === 'P06')
-            let withGetter = () => {
-                let pr = Promise.reject(new Error('boom-getter'))
-                Object.defineProperty(pr, 'then', {
-                    get() {
-                        throw new Error('then getter')
-                    },
-                })
-                return pr
-            }
-            let thenable = () => ({
-                then() {
-                    return Promise.reject(new Error('boom-thenable'))
-                },
-            })
-            for (let funLog of [withGetter, thenable]) {
-                let so = WServOrm(DS, mkWOrm(p6.plan), 'url', 'db', { funLog })
-                assert.strict.equal(await getReject(so.procOrm('u1', 'tests', 'save', ROWS())), p6.reject)
-            }
-            await new Promise((resolve) => setTimeout(resolve, 30))
-        }
-        finally {
-            process.off('unhandledRejection', h)
-        }
-        assert.strict.deepEqual(unhandled, [])
-    })
-
-    it('O10 getDiag本身: 取細節拋錯以(unprintable)代替, console拋錯不外傳, bare只在logDetail時省略標籤', async function() {
-        //R-DIAG-01 規則4: 診斷輸出不得使呼叫端拋錯(外審 terra F14: getDb舊版為console.log(err), 還原時不加標籤)
-        let boom = () => {
-            throw new Error('boom')
-        }
-        let cap = await capture(async () => {
-            getDiag({ logDetail: true, funLog: null })('L', { s: 1 }, boom)
-            getDiag({ logDetail: true, funLog: null })('L2', { s: 1 }, () => 'D', true)
-            getDiag({ logDetail: false, funLog: null })('L3', { s: 1 }, () => 'D', true)
-            getDiag({ logDetail: false, funLog: null })('L4')
-            getDiag()('L5', { s: 5 })
-        })
-        assert.strict.deepEqual(cap.calls, [['L', '(unprintable)'], ['D'], ['L3', { s: 1 }], ['L4'], ['L5', { s: 5 }]])
-        let got = []
-        getDiag({ logDetail: false, funLog: (...a) => got.push(a) })('L', { s: 1 }, boom)
-        assert.strict.deepEqual(got, [['L', { s: 1 }, '(unprintable)']])
-        let logOrig = console.log
-        console.log = () => {
-            throw new Error('console boom')
-        }
-        try {
-            getDiag({ logDetail: false, funLog: null })('L', { s: 1 })
-            getDiag({ logDetail: true, funLog: null })('L', { s: 1 }, () => 'D')
-        }
-        finally {
-            console.log = logOrig
         }
     })
 
@@ -712,177 +581,6 @@ describe('診斷選項之建構與行為(R-DIAG-01)', function() {
         assert.strict.equal(n, 1)
     })
 
-    it('O14c getOptLogLoose: 單一選項之getter拋錯只丟該選項, 不連累另一個有效選項', function() {
-        //R-DIAG-01(外審 terra R2-06)
-        let logger = () => {}
-        let a = {
-            funLog: logger,
-            get logDetail() {
-                throw new Error('boom')
-            },
-        }
-        assert.strict.deepEqual(getOptLogLoose(a), { logDetail: false, funLog: logger })
-        let b = {
-            logDetail: true,
-            get funLog() {
-                throw new Error('boom')
-            },
-        }
-        assert.strict.deepEqual(getOptLogLoose(b), { logDetail: true, funLog: null })
-        assert.strict.deepEqual(getOptLogLoose(undefined), { logDetail: false, funLog: null })
-        assert.strict.deepEqual(getOptLogLoose({ logDetail: 'true', funLog: 'x' }), { logDetail: false, funLog: null })
-    })
-
-    it('O14d cpDetail: 深層拷貝(巢狀物件與陣列互不共用), 原生Error保留原型與自有資料屬性, 不執行getter, Proxy與其他物件原樣, 超過上限者原樣', function() {
-        //R-DIAG-01 規則4(外審 terra R2-03、R2-04、R2-15): 交給funLog的細節與其後仍要使用的物件隔離
-        let inner = { deep: { x: 1 }, arr: [{ y: 2 }] }
-        let c = cpDetail({ a: inner, list: [inner] })
-        c.a.deep.x = 9
-        c.list[0].arr[0].y = 9
-        assert.strict.equal(inner.deep.x, 1)
-        assert.strict.equal(inner.arr[0].y, 2)
-        class MongoServerError extends Error {}
-        let e = new MongoServerError('orig')
-        e.code = 11000
-        e.nested = { k: 1 }
-        let ce = cpDetail(e)
-        assert.ok(ce instanceof MongoServerError && ce !== e)
-        assert.strict.equal(ce.message, 'orig')
-        assert.strict.equal(ce.code, 11000)
-        assert.ok(typeof ce.stack === 'string' && ce.stack.includes('orig') && ce.stack !== '[Getter/Setter]')
-        ce.message = 'masked'
-        ce.nested.k = 2
-        delete ce.code
-        assert.strict.equal(e.message, 'orig')
-        assert.strict.equal(e.nested.k, 1)
-        assert.strict.equal(e.code, 11000)
-        let n = 0
-        let withGetter = {
-            get g() {
-                n++
-                return 1
-            },
-            v: 1,
-        }
-        let cg = cpDetail(withGetter)
-        assert.strict.deepEqual(Object.keys(cg), ['g', 'v'])
-        assert.strict.equal(cg.g, '[Getter/Setter]', '存取器不執行, 以標記保留其鍵')
-        assert.strict.equal(n, 0)
-        let px = new Proxy({}, {})
-        assert.strict.equal(cpDetail(px), '[Proxy]') //不交出原參照
-        let proto = JSON.parse('{"__proto__":1,"id":"a"}')
-        let cp = cpDetail(proto)
-        assert.strict.equal(Object.getPrototypeOf(cp), Object.prototype)
-        assert.strict.equal(Object.keys(cp).length, 2)
-        //循環不致無窮遞迴(深度上限), 超過深度者為標記字串而非原參照
-        let loop = { a: 1 }
-        loop.self = loop
-        let cl = cpDetail(loop)
-        assert.strict.equal(cl.self.self.self.self.self.self.self.self, '[Truncated]')
-        assert.strict.equal(cpDetail('str'), 'str')
-        assert.strict.equal(cpDetail(null), null)
-    })
-
-    it('O14e cpDetail: Date不經實例方法、Error的stack只在內建getter時讀取、Buffer與Map與Set與類別實例皆獨立複本(外審 terra R3-01、R3-02)', function() {
-        //R-DIAG-01 規則4: 複製過程不得執行使用端程式, 亦不得與原物件共用可變內容
-        let calls = 0
-        let d = new Date(5)
-        d.getTime = () => {
-            calls++
-            return 99
-        }
-        let cd = cpDetail(d)
-        assert.strict.equal(calls, 0)
-        assert.strict.equal(Date.prototype.getTime.call(cd), 5)
-        let e = new Error('original')
-        //看似內建之getter: Function.prototype.toString 對bound函數呈現 [native code] 字樣
-        let userGetter = function() {
-            e.message = 'changed'
-            return this === null ? 'stack' : 'stack'
-        }
-        Object.defineProperty(e, 'stack', {
-            get: userGetter.bind(null),
-            configurable: true,
-        })
-        let ce = cpDetail(e)
-        assert.strict.equal(e.message, 'original', '使用端定義之stack getter(含看似原生之bound函數)不被執行')
-        assert.strict.equal(ce.stack, '[Getter/Setter]', '非內建getter之stack不執行, 以標記保留其鍵')
-        let e2 = new Error('x')
-        e2.extra = Buffer.from([65, 66])
-        e2.map = new Map([['k', { v: 1 }]])
-        e2.map.reason = 'map own prop'
-        e2.set = new Set([{ s: 1 }])
-        e2.set.reason = 'set own prop'
-        e2.date = new Date(7)
-        e2.date.reason = 'date own prop'
-        class Box {
-            constructor() {
-                this.items = [1, 2]
-            }
-        }
-        e2.box = new Box()
-        let c2 = cpDetail(e2)
-        c2.map.get('k').v = 2
-        let firstS = [...c2.set][0]
-        firstS.s = 2
-        c2.box.items.push(3)
-        assert.strict.equal(e2.map.get('k').v, 1)
-        assert.strict.equal([...e2.set][0].s, 1)
-        assert.strict.deepEqual(e2.box.items, [1, 2])
-        assert.ok(c2.box instanceof Box && c2.map instanceof Map && c2.set instanceof Set && c2.date instanceof Date)
-        assert.strict.equal(c2.map.reason, 'map own prop', 'Map之自有資料屬性保留(外審 terra R4-06)')
-        assert.strict.equal(c2.set.reason, 'set own prop')
-        assert.strict.equal(c2.date.reason, 'date own prop')
-        assert.ok(typeof c2.stack === 'string' && c2.stack.startsWith('Error: x\n'), '內建getter的stack仍複製(還原舊輸出含堆疊), 非標記字串')
-        //二進位資料一律標記, 不經structuredClone: Buffer不再與原資料共用、不變為Uint8Array、小視圖不牽動巨大底層緩衝區、共享記憶體不複製(外審 terra R4-03、R4-04、R4-05)
-        assert.strict.equal(c2.extra, '[Binary 2 bytes]')
-        assert.strict.equal(cpDetail(new Uint8Array(new ArrayBuffer(1024 ** 3), 0, 1)), '[Binary 1 bytes]')
-        assert.strict.equal(cpDetail(new Uint8Array(new SharedArrayBuffer(8))), '[Binary 8 bytes]')
-        assert.strict.equal(cpDetail(new DataView(new ArrayBuffer(4))), '[Binary 4 bytes]')
-        assert.strict.equal(cpDetail(new ArrayBuffer(3)), '[Binary 3 bytes]')
-        assert.strict.equal(cpDetail(new SharedArrayBuffer(8)), '[SharedArrayBuffer]')
-        //RegExp不執行其自有getter(外審 terra R4-02); 函數、Promise標記
-        let rx = /a/
-        let hit = 0
-        Object.defineProperty(rx, 'source', {
-            get() {
-                hit++
-                return 'a'
-            },
-        })
-        assert.strict.equal(cpDetail(rx), '[RegExp]')
-        assert.strict.equal(hit, 0)
-        assert.strict.equal(cpDetail(() => 1), '[Function]')
-        assert.strict.equal(cpDetail(Promise.resolve(1)), '[Object]')
-    })
-
-    it('O14f cpDetail: 寬陣列、稀疏陣列、大物件之處理量有上限; 陣列自有非索引鍵保留; 空洞與長度保留', function() {
-        //R-DIAG-01(外審 terra R3-03、R3-04): 診斷不得因細節巨大而卡住或耗盡記憶體
-        //[P6 效能時限] 處理量有界: 以CPU時間斷言, 裕度5000 CPU毫秒(見test/tools/cpuBound.mjs)
-        let { r: [sparse, wide, detailObj], cpu } = cpuMsSync(() => {
-            let sparse = cpDetail(new Array(2 ** 32 - 1))
-            let wide = cpDetail(new Array(300000).fill(1))
-            let obj = {}
-            for (let i = 0; i < 20000; i++) {
-                obj[`k${i}`] = i
-            }
-            return [sparse, wide, cpDetail(obj)]
-        }, 'O14f cpDetail')
-        assert.strict.equal(sparse.length, 2 ** 32 - 1)
-        assert.ok(Object.keys(wide).length <= 5000, `${Object.keys(wide).length}`)
-        assert.ok(Object.keys(detailObj).length <= 5000)
-        assert.ok(cpu < 5000, `耗時有界, CPU耗時 ${cpu} ms`)
-        let arr = [1, , 3] // eslint-disable-line no-sparse-arrays
-        arr.reason = 'driver failure'
-        let sym = Symbol('s')
-        arr[sym] = 's'
-        let ca = cpDetail(arr)
-        assert.strict.equal(ca.length, 3)
-        assert.ok(!(1 in ca), '空洞保留')
-        assert.strict.equal(ca.reason, 'driver failure')
-        assert.strict.equal(ca[sym], 's')
-    })
-
     it('O15 實例上backup、recover之函數型態與參數個數同原函數(AsyncFunction; length 1與3)', function() {
         //R-DIAG-01(外審 terra F16): 為帶入本實例之診斷設定而包裝, 型態與length不變; 各實例之函數身分不同
         let A = WServOrm(DS, mkWOrm({}), 'url', 'db')
@@ -909,7 +607,7 @@ describe('診斷選項之建構與行為(R-DIAG-01)', function() {
 
 describe('console診斷輸出站點盤點(R-DIAG-01)', function() {
 
-    //新不變式(外審 terra F01、F02、F03、F18後): src內除 getDiag.mjs 之 diag 外, 任何檔不得直接輸出(console、process.stdout/stderr、fs.writeSync到1或2、emitWarning、util.debuglog),
+    //新不變式(外審 terra F01、F02、F03、F18後; 2026-10-29 mig-servorm 起出口為wsemi之getDiag): src內任何檔不得直接輸出(console、process.stdout/stderr、fs.writeSync到1或2、emitWarning、util.debuglog),
     //包含無效參數、進度、完成訊息與錯誤, 一律經 diag 使 funLog 能接管且預設輸出不含呼叫端傳入之值; 新增直接輸出者須先於帳本歸類並更新此表
     function stripComment(line) {
         let t = line.trim()
@@ -952,9 +650,11 @@ describe('console診斷輸出站點盤點(R-DIAG-01)', function() {
         return out
     }
 
-    it('S01 src內console之出現: 只在getDiag.mjs(diag本體之4處), 其餘檔皆無(含別名、方括號記法)', function() {
-        //R-DIAG-01 規則5: 以識別字console計(涵蓋 console.log、console['log']、const c = console 等)
-        assert.strict.deepEqual(scan(/\bconsole\b/g), { 'getDiag.mjs': 4 })
+    it('S01 src內無console之出現(含別名、方括號記法); 自寫之診斷模組已刪除, 出口一律為wsemi之getDiag', function() {
+        //R-DIAG-01 規則5: 以識別字console計(涵蓋 console.log、console['log']、const c = console 等); dspec〈診斷輸出與遮罩〉D1: 不得另寫等價實作
+        assert.strict.deepEqual(scan(/\bconsole\b/g), {})
+        assert.ok(!fs.existsSync(path.resolve('./src/getDiag.mjs')), 'src/getDiag.mjs須已刪除')
+        assert.strict.deepEqual(scan(/wsemi\/src\/getDiag\.mjs/g), { 'getDiagBrief.mjs': 1 }, 'getDiag只在本套件之宣告處建立')
     })
 
     it('S02 src內無其他輸出途徑: process、globalThis、global之屬性存取、stdout/stderr、writeSync、emitWarning、debuglog、動態require與import', function() {
@@ -968,12 +668,12 @@ describe('console診斷輸出站點盤點(R-DIAG-01)', function() {
     //依檔綁定(外審 terra R3-07): 同一形式在其他檔不得使用,如 getSettings 不得以 k 當摘要
     let SAFE_ARGS = {
         'genTestData.mjs': ['{ n: getBriefCount(rs) }'],
-        'getDb.mjs': ['(none)', 'getBriefErr(err)', '{ n: size(tabs), tables: keys(tabs) }'],
-        'getDbBackupAndRecover.mjs': ['(none)', 'getBriefType(woItems)', 'getBriefType(fp)', 'getBriefResult(r)', 'k', 'v.name'],
+        'getDb.mjs': ['(none)', 'diag.brief(err)', '{ n: size(tabs), tables: keys(tabs) }'],
+        'getDbBackupAndRecover.mjs': ['(none)', 'getBriefType(woItems)', 'getBriefType(fp)', 'getBriefResult(r)', '{ table: k }', '{ table: v.name }'],
         'getMapOrm.mjs': [
             '(none)',
-            'getBriefErr(msg)',
-            'getBriefErr(e)',
+            'diag.brief(msg)',
+            'diag.brief(e)',
             'getBriefFails(fails)',
             'getBriefFails(failsNotObj)',
             'getBriefFails(failsIdXSS)',
@@ -983,14 +683,14 @@ describe('console診斷輸出站點盤點(R-DIAG-01)', function() {
             'getBriefResult(rs)',
             'getBriefResult(rsAdd)',
             'getBriefType(ds)',
-            '[...msgsBadKey]',
-            '[...msgsSameId]',
+            '{ msgs: [...msgsBadKey] }',
+            '{ msgs: [...msgsSameId] }',
             '{ reason: errFind }',
         ],
-        'getSettings.mjs': ['{ keys: ks.filter((v) => KEYS_KNOWN.indexOf(v) >= 0), nOther: ks.filter((v) => KEYS_KNOWN.indexOf(v) < 0).length }', 'getBriefErr(err)'],
+        'getSettings.mjs': ['{ keys: ks.filter((v) => KEYS_KNOWN.indexOf(v) >= 0), nOther: ks.filter((v) => KEYS_KNOWN.indexOf(v) < 0).length }', 'diag.brief(err)'],
         'getWoItems.mjs': ['getBriefType(ds)', 'getBriefType(WOrm)', 'getBriefType(url)', 'getBriefType(db)'],
     }
-    //各檔 diag 呼叫數(新增站點須先歸類並更新): 2026-10-28 共66處
+    //各檔 diag 呼叫數(新增站點須先歸類並更新): 2026-10-28 共66處(2026-10-29 mig-servorm 遷移後不變)
     let SITE_COUNTS = { 'genTestData.mjs': 2, 'getDb.mjs': 8, 'getDbBackupAndRecover.mjs': 7, 'getMapOrm.mjs': 43, 'getSettings.mjs': 2, 'getWoItems.mjs': 4 }
 
     function splitTop(s) {
@@ -1076,12 +776,13 @@ describe('console診斷輸出站點盤點(R-DIAG-01)', function() {
         return out
     }
 
-    it('S04 src內每個 diag 呼叫之摘要引數皆在語法白名單內, 且各檔站點數同已歸類之表', function() {
+    it('S04 src內每個 diag 呼叫之摘要引數皆在語法白名單內, 各檔站點數同已歸類之表, 且皆不帶level(全部寫console.log)', function() {
         //R-DIAG-01 規則5(外審 terra R2-12): 以站點而非標籤集合鎖定; 例如在既有標籤的站點加印輸入(diag(標籤, input))會因摘要引數不在白名單而失敗
+        //dspec〈診斷輸出與遮罩〉§6.7第2點: 舊參數bare換為level, 本套件之站點舊版皆為console.log, 故一律不帶level(stdout; 串流驗證見unit-diaglog-wire之E組與api-diaglog)
         let fd = path.resolve('./src')
         let counts = {}
         let bad = []
-        for (let f of fs.readdirSync(fd).filter((v) => v.endsWith('.mjs') && v !== 'getDiag.mjs').sort()) {
+        for (let f of fs.readdirSync(fd).filter((v) => v.endsWith('.mjs')).sort()) {
             let txt = fs.readFileSync(path.join(fd, f), 'utf8').split(/\r?\n/).map(stripComment).join('\n')
             let cs = scanCalls(txt)
             if (cs.length > 0) {
@@ -1092,13 +793,16 @@ describe('console診斷輸出站點盤點(R-DIAG-01)', function() {
                 if (!(SAFE_ARGS[f] || []).includes(safe)) {
                     bad.push(`${f}: ${a[0]} -> ${safe}`)
                 }
+                if (a.length > 3) {
+                    bad.push(`${f}: ${a[0]} -> level ${a[3]}`)
+                }
             }
         }
         assert.strict.deepEqual(bad, [])
         assert.strict.deepEqual(counts, SITE_COUNTS)
     })
 
-    it('S05 getDiag.mjs以外之檔不得 import 後直接輸出: logFind之診斷亦只經 diag', function() {
+    it('S05 src之檔不得 import 後直接輸出: logFind之診斷亦只經 diag', function() {
         //R-DIAG-01: logFind 內之 diag 摘要為 { reason: errFind }(S04 已涵蓋); 此案確認 logFind 之呼叫皆傳 diag 與 errFind
         let txt = fs.readFileSync(path.resolve('./src/getMapOrm.mjs'), 'utf8').split(/\r?\n/).map(stripComment).join('\n')
         let calls = [...txt.matchAll(/\blogFind\(([^)]*)\)/g)].map((m) => m[1])

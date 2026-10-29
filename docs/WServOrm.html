@@ -104,8 +104,13 @@ insert、save與mix之新增、修改，寫入前各欄位之字串皆經wsemi�
 呼叫契約：check以reject或拋錯阻擋，回傳值不影響結果，且早於前處理執行；前處理逐一呼叫，各收新建之參數物件{woName,userId,mode,input}，input為前一個回傳之input，回傳須為含input之物件否則reject；後處理逐一呼叫，各收新建之參數物件且其output為前一個之回傳值，最後之回傳值即為procOrm之回傳值。
 後處理只在check、前處理與ORM操作皆成功後執行，逐筆失敗(含del)或mix部分寫入後reject者皆不執行；後處理自身亦可reject。後處理之input為前處理後之數據(無前處理者即呼叫端傳入之數據)，不含本套件之補值與主鍵轉型，主鍵見output。
 如需觀察ORM實際寫入，可另監聽woItems內各ORM之change與error事件；惟事件由ORM發出，不含userId，mix會依步驟分次發出，經woItems直接寫入者亦會發出，insert之結果為聚合計數而非逐筆。
-錯誤型別：procOrm由本套件產生之reject一律為英文訊息字串(供前端顯示或對應多語系；ORM之錯誤原文只在診斷輸出之細節而不轉出；檢查與轉型階段之非預期例外，如使用端物件之Proxy陷阱拋錯、遞迴爆堆疊，統一為'failed to process input')，擴充函數自身之reject或拋錯則原樣轉出；建構(設定或ORM無效)、擴充函數註冊、backup與recover由本套件產生之錯誤一律為Error，ORM之錯誤則原樣轉出。</p>
-<p>診斷輸出(規則帳本R-DIAG-01)：寫入失敗、輸入被拒等情形本套件會輸出一行診斷，行程標準輸出常被pm2或容器log收集而主鍵可能是使用者識別，故預設不輸出主鍵、資料值與ORM錯誤原文，只輸出標籤(含表名與操作，如'users.save fail')與不含個資之摘要：逐筆失敗為{ n: 失敗筆數, ks: [前10筆之位置] }，ORM回聚合物件而ok為0者為{ ok: 0 }，ORM或後端reject或拋錯為{ errType: 建構子名稱, errCode?: 機器代碼 }(字串reject為{ errType: 'string' }，不列訊息文字；errCode只放行ENOENT類、ERR_開頭、SQLSTATE 5碼與絕對值至99999之整數)，被拒之條件為{ reason: 固定拒收句 }，呼叫端傳入之無效參數(ds、WOrm、url、db、woItems、fp)為{ type: 型別名稱 }。src內所有診斷輸出(含進度、完成訊息與無效參數)都經同一出口，除該出口外沒有直接之console呼叫。procOrm之resolve與reject內容與時機不因此改變(逐筆失敗之reject訊息列主鍵與recover、genTestData拋出之Error訊息屬回傳契約，不受影響)。opt.logDetail(布林，預設false)為true時console還原為含主鍵與錯誤原文之完整細節(供除錯)；opt.funLog(label, safe, detail)為使用端提供之紀錄函式，給予時診斷輸出只交給它而不寫console，label為標籤、safe為上述摘要(無則undefined)、detail為完整細節(含主鍵與錯誤原文，無則不傳；與其後流程共用之細節〔失敗清單、拋給呼叫端之Error、傳給模型產生器之schema等〕為深層拷貝，使用端原地遮罩不影響結果，超過深度8或節點5000者以標記字串代替)，供使用端遮罩或轉送，funLog同步拋錯或回傳rejected promise或thenable皆被吞下而不影響procOrm(刻意構造之惡意promise不在保證內)；funLog優先於logDetail。型別錯誤(logDetail非布林、funLog非函數；undefined與null視為未給)於建構時拋Error，早於建立各資料表ORM；選項只讀取一次。各實例各自持有設定。實例上之backup與recover(參數不變，各實例之函數身分不同)之診斷輸出依本實例之設定，getDb之backup與recover、genTestData、getSettings則依其各自opt之同名選項(型別錯誤者忽略並用預設，同其bLog)。建議會把標準輸出交給pm2或容器收集之服務(如w-web-*)以opt.funLog接管。</p>
+錯誤型別：procOrm由本套件產生之reject一律為英文訊息字串(供前端顯示或對應多語系；ORM之錯誤原文只在診斷輸出之細節而不轉出；檢查與轉型階段之非預期例外，如使用端物件之Proxy陷阱拋錯、遞迴爆堆疊，統一為'failed to process input')，擴充函數自身之reject或拋錯則轉出其值(含本實例連線憑證者為遮罩後之副本，見下述對外錯誤值)；建構(設定或ORM無效)、擴充函數註冊、backup與recover由本套件產生之錯誤一律為Error，ORM之錯誤則轉出其值(同擴充函數)。</p>
+<p>對外錯誤值(規則帳本R-DIAG-01，跨套件規格〈診斷輸出與遮罩〉D3)：外來值(ORM之錯誤含建構與close、檔案系統、擴充函數、recover之模型產生器、genTestData之funTest等使用端回呼拋出或reject之值)於本套件之catch站點經wsemi之diag.err，
+含本實例連線憑證(url之整串、密碼、帳:密、查詢參數之秘密值等)、網址帳密或憑證鍵值對者轉出同類別之副本(instanceof與自有屬性保留，憑證為***，原物件不改動)，無須處理者轉出原物件(身分不變)；只遮憑證，單獨帳號、儲存路徑與主鍵等識別值不遮。
+本套件以固定詞彙組成之reject與throw(procOrm之固定字串、逐筆失敗之主鍵訊息、rowNotFound、守門函數之訊息等)一律原樣，不經遮罩；recover與genTestData之失敗訊息只對其中ORM回傳原文之段經diag.mask。withTabLocks之fn與guardWrite之read、write之reject原樣轉出(多為procOrm之固定詞彙，供getRejectKey判讀)。</p>
+<p>診斷輸出(規則帳本R-DIAG-01)：寫入失敗、輸入被拒等情形本套件會輸出一行診斷，行程標準輸出常被pm2或容器log收集而主鍵可能是使用者識別，故預設不輸出主鍵、資料值與ORM錯誤原文，只輸出標籤(含表名與操作，如'users.save fail')與不含個資之摘要：逐筆失敗為{ n: 失敗筆數, ks: [前10筆之位置] }，ORM回聚合物件而ok為0者為{ ok: 0 }，ORM或後端reject或拋錯為wsemi之getDiagBriefErr之{ errType, errCode? }(errType只列內建錯誤類別名，其餘為'Error'，字串reject為'string'；errCode只收wsemi明列之代碼集合，本套件宣告sqlstate、sqlite、mysql、mssql、mongo、mongoServer、lmdb、level並讀巢狀之original、parent)，被拒之條件為{ reason: 固定拒收句 }，呼叫端傳入之無效參數(ds、WOrm、url、db、woItems、fp)為{ type: 型別名稱 }，進度為{ table: 表名 }。
+出口、遮罩、細節拷貝與錯誤摘要一律由wsemi之getDiag系列處理(wsemi規則帳本R-DIAG-01；選項與細節之完整規則以wsemi各函數之JSDoc為準)，本套件只宣告秘密來源(本實例之url：連線字串之帳密，或檔案位置之儲存路徑)、代碼集合與safe之鍵(src/getDiagBrief.mjs)；src內沒有直接之console呼叫，全部站點寫console.log。procOrm之resolve與reject內容與時機不因診斷選項改變(逐筆失敗之reject訊息列主鍵屬回傳契約)。
+opt.logDetail(布林，預設false)為true時console輸出console.log(標籤, 細節)，細節含主鍵與錯誤原文、連線憑證已遮罩(供除錯)；opt.funLog(label, safe, detail)為使用端提供之紀錄函式，給予時診斷輸出只交給它而不寫console，label為標籤、safe為上述摘要(無則undefined)、detail為細節(無則不傳)，細節一律為wsemi之maskDiagCopy之遮罩拷貝(不交出原參照、不沿用使用端原型、有界)，使用端原地改動不影響結果；funLog帶noDetail===true者(wsemi之genDiagFunLog所產生者)只收(label, safe)；funLog同步拋錯或回傳rejected promise皆被吞下而不影響procOrm；funLog優先於logDetail。型別錯誤(logDetail非布林、funLog非函數；undefined與null視為未給)於建構時拋Error，早於建立各資料表ORM；選項只讀取一次。各實例各自持有設定。實例上之backup與recover(參數不變，各實例之函數身分不同)之診斷輸出依本實例之設定，getDb之backup與recover、genTestData、getSettings則依其各自opt之同名選項(型別錯誤者忽略並用預設，同其bLog)。建議會把標準輸出交給pm2或容器收集之服務(如w-web-*)以opt.funLog接管。</p>
 <p>授權：procOrm不做授權，不檢查使用者，亦不依使用者過濾數據；userId只供寫入稽核欄位(userId、userIdUpdate)與交給擴充函數。procOrm開放給前端時(如讓前端經資料通道直接操作資料表)，須由開放處負責授權；addFunCheck可掛額外檢查，惟伺服端程式之呼叫亦會經過。
 已移除之設定：useCheckUser、getUserById、useExcludeWhenNotAdmin，未給、null或false者照常建構，給予其他值即於建構時拋錯。
 身分驗證責任(跨套件原則，見自有套件庫主控之 dspec「使用者身分驗證原則」)：自1.1.10起本套件不驗證token與使用者，傳入之userId一律視為使用方已完整驗證之身分；使用方(例如w-web-*之verifyConn與getUserIdByToken)須確認token有效、本系統使用者存在且啟用、通過部署方授權，並於函數層級檢查角色或成員。</p></li></ul></dd>
@@ -114,7 +119,7 @@ insert、save與mix之新增、修改，寫入前各欄位之字串皆經wsemi�
     
     <dt class="tag-source">Source:</dt>
     <dd class="tag-source"><ul class="dummy"><li>
-        <a href="WServOrm.mjs.html">WServOrm.mjs</a>, <a href="WServOrm.mjs.html#line150">line 150</a>
+        <a href="WServOrm.mjs.html">WServOrm.mjs</a>, <a href="WServOrm.mjs.html#line172">line 172</a>
     </li></ul></dd>
     
 
@@ -435,7 +440,7 @@ insert、save與mix之新增、修改，寫入前各欄位之字串皆經wsemi�
                 </td>
             
 
-            <td class="description last"><p>輸入診斷輸出是否還原為含主鍵與錯誤原文之完整細節，預設false(只輸出不含個資之摘要)，見上述診斷輸出</p></td>
+            <td class="description last"><p>輸入診斷輸出是否輸出含主鍵與錯誤原文之細節(連線憑證已遮罩)，預設false(只輸出不含個資之摘要)，見上述診斷輸出</p></td>
         </tr>
 
     
@@ -565,7 +570,7 @@ insert、save與mix之新增、修改，寫入前各欄位之字串皆經wsemi�
 <br class="clear">
 
 <footer>
-    Documentation generated by <a href="https://github.com/jsdoc3/jsdoc">JSDoc 4.0.5</a> on Thu Oct 29 2026 09:47:56 GMT+0800 (台北標準時間) using the <a href="https://github.com/clenemt/docdash">docdash</a> theme.
+    Documentation generated by <a href="https://github.com/jsdoc3/jsdoc">JSDoc 4.0.5</a> on Thu Oct 29 2026 20:35:13 GMT+0800 (台北標準時間) using the <a href="https://github.com/clenemt/docdash">docdash</a> theme.
 </footer>
 
 <script>prettyPrint();</script>

@@ -17,7 +17,8 @@ import isnum from 'wsemi/src/isnum.mjs'
 import clearXSS from 'wsemi/src/clearXSS.mjs'
 import getItemsFail from 'w-data-collector/src/getItemsFail.mjs'
 import isOrmFail from './isOrmFail.mjs'
-import { getOptLog, getDiag, getBriefErr, getBriefFails, getBriefResult, getBriefType, cpDetail } from './getDiag.mjs'
+import isfun from 'wsemi/src/isfun.mjs'
+import { genDiag, getBriefFails, getBriefResult, getBriefType } from './getDiagBrief.mjs'
 
 
 //MODES_PROC, procOrm之mode全集: 邊界catch之標籤只放行這些固定值(R-DIAG-01)
@@ -1153,7 +1154,7 @@ async function mapOrm(ds, woItems, userId, woName, mode, input, opt, diag) {
             //woItems為已撤銷之Proxy等: 不回顯
         }
         let modeOk = typeof mode === 'string' && MODES_PROC.indexOf(mode) >= 0
-        diag(`${nameOk ? woName : ''}.${modeOk ? mode : ''} mapOrm catch`, getBriefErr(e), () => e)
+        diag(`${nameOk ? woName : ''}.${modeOk ? mode : ''} mapOrm catch`, diag.brief(e), () => e)
         return Promise.reject('failed to process input')
     }
 }
@@ -1199,7 +1200,7 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt, diag) {
         //select, 條件中主鍵之比較值轉型(R-ID-02)
         r = await wo.select(idCast ? castIdFind(input) : input)
             .catch((msg) => {
-                diag(`${woName}.select catch`, getBriefErr(msg), () => msg)
+                diag(`${woName}.select catch`, diag.brief(msg), () => msg)
                 err = 'failed to select data'
             })
 
@@ -1227,14 +1228,14 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt, diag) {
         //check, 各筆須為一般物件, 否則整批拒絕且不寫入任何一筆(R-INPUT-01)
         let failsNotObj = getItemsNotObj(input)
         if (size(failsNotObj) > 0) {
-            diag(`${woName}.${mode} data is not an object`, getBriefFails(failsNotObj), () => cpDetail(failsNotObj))
+            diag(`${woName}.${mode} data is not an object`, getBriefFails(failsNotObj), () => failsNotObj)
             return Promise.reject(getMsgFail(`${msgMode}, not an object`, failsNotObj))
         }
 
         //check, 各筆任何深度不得含自有__proto__鍵與存取器屬性, 否則整批拒絕且不寫入任何一筆(R-OBJ-01 規則3)
         let msgsBadKey = getMsgsBadKey(msgMode, input)
         if (size(msgsBadKey) > 0) {
-            diag(`${woName}.${mode} data has unsupported key`, [...msgsBadKey], () => [...msgsBadKey]) //訊息為固定句型加位置, 不含主鍵與資料值; 交出拷貝
+            diag(`${woName}.${mode} data has unsupported key`, { msgs: [...msgsBadKey] }, () => msgsBadKey) //訊息為固定句型加位置, 不含主鍵與資料值; diag一律交出拷貝
             return Promise.reject(join(msgsBadKey, '; '))
         }
 
@@ -1246,7 +1247,7 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt, diag) {
         //check, 主鍵會被clearXSS改寫者整批拒絕, 不寫入任何一筆
         let failsIdXSS = getItemsIdXSS(input)
         if (size(failsIdXSS) > 0) {
-            diag(`${woName}.${mode} id changed by clearXSS`, getBriefFails(failsIdXSS), () => cpDetail(failsIdXSS))
+            diag(`${woName}.${mode} id changed by clearXSS`, getBriefFails(failsIdXSS), () => failsIdXSS)
             return Promise.reject(getMsgIdXSS(msgMode, failsIdXSS))
         }
 
@@ -1256,7 +1257,7 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt, diag) {
         }
         catch (e) {
             let msgE = e.toString() //同舊版立即求值: 例外之toString拋錯(如拋出null)者交邊界保證轉為failed to process input, 診斷輸出不改變此結果
-            diag(`${woName}.adjustData catch`, getBriefErr(e), () => msgE)
+            diag(`${woName}.adjustData catch`, diag.brief(e), () => msgE)
             err = 'failed to adjust data'
             return Promise.reject(err)
         }
@@ -1266,7 +1267,7 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt, diag) {
         if (mode === 'save' && optProc.mustExist) {
             let missing = await hasMissingRow(wo, input)
                 .catch((msg) => {
-                    diag(`${woName}.save exist check catch`, getBriefErr(msg), () => msg)
+                    diag(`${woName}.save exist check catch`, diag.brief(msg), () => msg)
                     err = 'failed to save data'
                 })
             if (isestr(err)) {
@@ -1282,7 +1283,7 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt, diag) {
         if (mode === 'insert') {
             r = await wo.insert(input)
                 .catch((msg) => {
-                    diag(`${woName}.insert catch`, getBriefErr(msg), () => msg)
+                    diag(`${woName}.insert catch`, diag.brief(msg), () => msg)
                     err = 'failed to insert data'
                 })
         }
@@ -1290,7 +1291,7 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt, diag) {
             //只改不增者轉傳autoInsert:false(各ORM於未命中時不寫入); 其餘維持單參數呼叫
             r = await (optProc.mustExist ? wo.save(input, { autoInsert: false }) : wo.save(input))
                 .catch((msg) => {
-                    diag(`${woName}.save catch`, getBriefErr(msg), () => msg)
+                    diag(`${woName}.save catch`, diag.brief(msg), () => msg)
                     err = 'failed to save data'
                 })
         }
@@ -1310,7 +1311,7 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt, diag) {
         if (mode === 'save') {
             let fails = getItemsFail(r, input)
             if (size(fails) > 0) {
-                diag(`${woName}.save fail`, getBriefFails(fails), () => cpDetail(fails))
+                diag(`${woName}.save fail`, getBriefFails(fails), () => fails)
                 return Promise.reject(getMsgFail('failed to save data', getItemsFail(r, inputOrig)))
             }
 
@@ -1360,13 +1361,13 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt, diag) {
             //check, 同批重複主鍵整批拒絕, 訊息列其位置而不回顯主鍵(同R-MIX-01)
             let failsDup = getItemsDupId(input)
             if (size(failsDup) > 0) {
-                diag(`${woName}.del duplicate id`, getBriefFails(failsDup), () => cpDetail(failsDup))
+                diag(`${woName}.del duplicate id`, getBriefFails(failsDup), () => failsDup)
                 return Promise.reject(getMsgFail('invalid input of del, duplicate id', failsDup))
             }
 
             let missing = await hasMissingRow(wo, input)
                 .catch((msg) => {
-                    diag(`${woName}.del exist check catch`, getBriefErr(msg), () => msg)
+                    diag(`${woName}.del exist check catch`, diag.brief(msg), () => msg)
                     err = 'failed to delete data'
                 })
             if (isestr(err)) {
@@ -1381,7 +1382,7 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt, diag) {
         //del
         r = await wo.del(input)
             .catch((msg) => {
-                diag(`${woName}.del catch`, getBriefErr(msg), () => msg)
+                diag(`${woName}.del catch`, diag.brief(msg), () => msg)
                 err = 'failed to delete data'
             })
 
@@ -1389,7 +1390,7 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt, diag) {
         if (!isestr(err)) {
             let fails = getItemsFail(r, input)
             if (size(fails) > 0) {
-                diag(`${woName}.del fail`, getBriefFails(fails), () => cpDetail(fails))
+                diag(`${woName}.del fail`, getBriefFails(fails), () => fails)
                 err = getMsgFail('failed to delete data', fails)
             }
             else if (isOrmFail(r)) {
@@ -1418,7 +1419,7 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt, diag) {
         //delAll, 條件中主鍵之比較值轉型(R-ID-02)
         r = await wo.delAll(idCast ? castIdFind(input) : input)
             .catch((msg) => {
-                diag(`${woName}.delAll catch`, getBriefErr(msg), () => msg)
+                diag(`${woName}.delAll catch`, diag.brief(msg), () => msg)
                 err = 'failed to delete data'
             })
 
@@ -1472,7 +1473,7 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt, diag) {
         for (let [key, msg] of [['add', 'failed to insert data'], ['diff', 'failed to update data']]) {
             let fails = getItemsNotObj(get(input, key, []))
             if (size(fails) > 0) {
-                diag(`${woName}.mix ${key} data is not an object`, getBriefFails(fails), () => cpDetail(fails))
+                diag(`${woName}.mix ${key} data is not an object`, getBriefFails(fails), () => fails)
                 msgsNotObj.push(getMsgFail(`${msg}, not an object`, fails))
             }
         }
@@ -1486,14 +1487,14 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt, diag) {
             msgsBadKey.push(...getMsgsBadKey(msg, get(input, key, [])))
         }
         if (size(msgsBadKey) > 0) {
-            diag(`${woName}.mix data has unsupported key`, [...msgsBadKey], () => [...msgsBadKey]) //訊息為固定句型加位置, 不含主鍵與資料值; 交出拷貝
+            diag(`${woName}.mix data has unsupported key`, { msgs: [...msgsBadKey] }, () => msgsBadKey) //訊息為固定句型加位置, 不含主鍵與資料值; diag一律交出拷貝
             return Promise.reject(join(msgsBadKey, '; '))
         }
 
         //check, del列之id不得為存取器或繼承而來(同鍵防線之前提), 於任何步驟寫入之前整批拒絕
         let failsIrregularId = getItemsIrregularId(get(input, 'del', []))
         if (size(failsIrregularId) > 0) {
-            diag(`${woName}.mix del id is not an own data property`, getBriefFails(failsIrregularId), () => cpDetail(failsIrregularId))
+            diag(`${woName}.mix del id is not an own data property`, getBriefFails(failsIrregularId), () => failsIrregularId)
             return Promise.reject(getMsgFail(`failed to delete data, ${MSGS_BAD_KEY.irregular}`, failsIrregularId))
         }
 
@@ -1512,7 +1513,7 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt, diag) {
         for (let [key, msg] of [['add', 'failed to insert data'], ['diff', 'failed to update data']]) {
             let fails = getItemsIdXSS(get(input, key, []))
             if (size(fails) > 0) {
-                diag(`${woName}.mix ${key} id changed by clearXSS`, getBriefFails(fails), () => cpDetail(fails))
+                diag(`${woName}.mix ${key} id changed by clearXSS`, getBriefFails(fails), () => fails)
                 msgsIdXSS.push(getMsgIdXSS(msg, fails))
             }
         }
@@ -1523,7 +1524,7 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt, diag) {
         //check, add與del、del與diff同鍵者, 於任何步驟寫入之前整批拒絕(R-MIX-01)
         let msgsSameId = getMsgsMixSameId(input)
         if (size(msgsSameId) > 0) {
-            diag(`${woName}.mix same id across steps`, [...msgsSameId], () => [...msgsSameId]) //訊息只列各段位置, 不含主鍵; 交出拷貝
+            diag(`${woName}.mix same id across steps`, { msgs: [...msgsSameId] }, () => msgsSameId) //訊息只列各段位置, 不含主鍵; diag一律交出拷貝
             return Promise.reject(join(msgsSameId, '; '))
         }
 
@@ -1543,7 +1544,7 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt, diag) {
             }
             catch (e) {
                 let msgE = e.toString() //同上, 立即求值
-                diag(`${woName}.adjustData catch`, getBriefErr(e), () => msgE)
+                diag(`${woName}.adjustData catch`, diag.brief(e), () => msgE)
                 err = 'failed to adjust data'
                 return Promise.reject(err)
             }
@@ -1558,7 +1559,7 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt, diag) {
             }
             catch (e) {
                 let msgE = e.toString() //同上, 立即求值
-                diag(`${woName}.adjustData catch`, getBriefErr(e), () => msgE)
+                diag(`${woName}.adjustData catch`, diag.brief(e), () => msgE)
                 err = 'failed to adjust data'
                 return Promise.reject(err)
             }
@@ -1566,7 +1567,7 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt, diag) {
             //insert
             let rsAdd = await wo.insert(add)
                 .catch((msg) => {
-                    diag(`${woName}.insert catch`, getBriefErr(msg), () => msg)
+                    diag(`${woName}.insert catch`, diag.brief(msg), () => msg)
                     err = 'failed to insert data'
                 })
 
@@ -1594,7 +1595,7 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt, diag) {
             //del
             let rs = await wo.del(del)
                 .catch((msg) => {
-                    diag(`${woName}.del catch`, getBriefErr(msg), () => msg)
+                    diag(`${woName}.del catch`, diag.brief(msg), () => msg)
                     err = 'failed to delete data'
                 })
 
@@ -1606,7 +1607,7 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt, diag) {
             //check, 單筆失敗時整批仍resolve並以該筆ok為0回報, 須逐筆檢查
             let fails = getItemsFail(rs, del)
             if (size(fails) > 0) {
-                diag(`${woName}.del fail`, getBriefFails(fails), () => cpDetail(fails))
+                diag(`${woName}.del fail`, getBriefFails(fails), () => fails)
                 msgsFail.push(getMsgFail('failed to delete data', fails))
             }
             else if (isOrmFail(rs)) {
@@ -1634,7 +1635,7 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt, diag) {
             //save
             let rs = await wo.save(diff)
                 .catch((msg) => {
-                    diag(`${woName}.save catch`, getBriefErr(msg), () => msg)
+                    diag(`${woName}.save catch`, diag.brief(msg), () => msg)
                     err = 'failed to update data'
                 })
 
@@ -1646,7 +1647,7 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt, diag) {
             //check, 單筆失敗時整批仍resolve並以該筆ok為0回報, 須逐筆檢查
             let fails = getItemsFail(rs, diff)
             if (size(fails) > 0) {
-                diag(`${woName}.save fail`, getBriefFails(fails), () => cpDetail(fails))
+                diag(`${woName}.save fail`, getBriefFails(fails), () => fails)
                 msgsFail.push(getMsgFail('failed to update data', getItemsFail(rs, diffOrig)))
             }
             else if (isOrmFail(rs)) {
@@ -1682,10 +1683,12 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt, diag) {
 }
 
 
-function getMapOrm(ds, woItems, optServ) {
+function getMapOrm(ds, woItems, optServ = undefined, diag = undefined) {
     //每次呼叫各自綁定ds與woItems並回傳新函數, 令同一行程內之多個實例互不干擾; 回傳函數之參數形狀為(userId, woName, mode, input, opt), 前四個維持, opt為選用(R-ONLYMOD-01)
-    //optServ(選用)為WServOrm之設定物件, 取其logDetail與funLog決定診斷輸出(R-DIAG-01), 未給為預設(安全摘要); 型別錯誤拋Error, 各實例各自持有
-    let diag = getDiag(getOptLog(optServ))
+    //diag(選用, 內部)為WServOrm實例之診斷出口(含連線位址之秘密); 未給者以optServ(取其logDetail與funLog, 型別不合者用預設, R-DIAG-01)建立, 無登錄之秘密; 各實例各自持有
+    if (!isfun(diag)) {
+        diag = genDiag(optServ)
+    }
     return async (userId, woName, mode, input, opt) => {
         return mapOrm(ds, woItems, userId, woName, mode, input, opt, diag)
     }

@@ -6,6 +6,19 @@ import checkOptRemoved from './checkOptRemoved.mjs'
 import { getOptProc } from './getMapOrm.mjs'
 
 
+//GUARD_MSGS, addFunCheck註冊非函數時守門函數之固定詞彙reject(typeof之全部結果), 不經遮罩(R-DIAG-01)
+const GUARD_MSGS = ['undefined', 'object', 'boolean', 'number', 'bigint', 'string', 'symbol', 'function'].map((t) => `addFunCheck needs a function, but got ${t}`)
+
+
+function extErr(st, err) {
+    //擴充函數(使用端回呼)拋出或reject之值為外來值, 經本實例之diag.err移除連線憑證後轉出(無應處理者為原值, 身分不變); 守門函數之固定詞彙原樣; 未給diag者(直接使用getProc)原樣
+    if (st.diag === null || (typeof err === 'string' && GUARD_MSGS.indexOf(err) >= 0)) {
+        return err
+    }
+    return st.diag.err(err)
+}
+
+
 function addFun(fs, f, name, hook, useGuard, opt) {
     //由外部添加擴充函數至該實例之陣列
     //延後1ms生效係沿用既有之生效時序: 原為避開模組層陣列於循環引用時之「Cannot access before initialization」,
@@ -49,16 +62,27 @@ async function procOrm(st, userId, woName, mode, input, opt) {
         return Promise.reject(optProc.err)
     }
 
-    //funChecks, 擴充檢查, 提供給各 mOrm[OOO].mjs 檢查
-    await pmSeries(st.funChecks, (v) => {
-        return v({ woName, userId, mode, input })
-    })
+    //funChecks, 擴充檢查, 提供給各 mOrm[OOO].mjs 檢查; 其reject經extErr
+    try {
+        await pmSeries(st.funChecks, (v) => {
+            return v({ woName, userId, mode, input })
+        })
+    }
+    catch (err) {
+        throw extErr(st, err)
+    }
 
     //funPreProcessing, 擴充前處理input, 提供給各 mOrm[OOO].mjs 前處理
     //逐一呼叫, 各前處理皆收新建之參數物件, input為前一個回傳之input; 回傳須為含input之物件, 否則reject, 避免input成為undefined而令select回全表
     //迭代前先取快照, 呼叫進行中註冊者不套用於本次呼叫
     for (let f of [...st.funPreProcessing]) {
-        let paramsOut = await f({ woName, userId, mode, input })
+        let paramsOut = null
+        try {
+            paramsOut = await f({ woName, userId, mode, input })
+        }
+        catch (err) {
+            throw extErr(st, err)
+        }
         if (!iseobj(paramsOut) || paramsOut.input === undefined) {
             return Promise.reject(`invalid return of pre-processing, need an object with input`)
         }
@@ -72,15 +96,21 @@ async function procOrm(st, userId, woName, mode, input, opt) {
     //funPostProcessing, 擴充後處理output, 提供給各 mOrm[OOO].mjs 後處理
     //逐一呼叫, 各後處理皆收新建之參數物件, output為前一個之回傳值, 回傳值成為新output; 迭代前先取快照
     for (let f of [...st.funPostProcessing]) {
-        output = await f({ woName, userId, mode, input, output })
+        try {
+            output = await f({ woName, userId, mode, input, output })
+        }
+        catch (err) {
+            throw extErr(st, err)
+        }
     }
 
     return output
 }
 
 
-function getProc(mapOrm, opt = {}) {
+function getProc(mapOrm, opt = {}, diag = undefined) {
     //mapOrm為getMapOrm之回傳函數, opt目前無設定鍵, 只檢查已移除之設定; 使用端有直接呼叫者(如測試以getMapOrm與getProc組出procOrm), 故檢查與WServOrm一致
+    //diag(選用, 內部)為WServOrm實例之診斷出口, 擴充函數之reject經其diag.err(R-DIAG-01); 未給者原樣轉出
     //建構期之錯誤一律為Error, 與procOrm之字串reject區隔
 
     //checkOptRemoved
@@ -97,6 +127,7 @@ function getProc(mapOrm, opt = {}) {
         funPreProcessing: [],
         funPostProcessing: [],
         mapOrm,
+        diag: isfun(diag) ? diag : null,
     }
 
     //回傳函數綁定st而不依賴this, 使用端可解構取用並當裸函數傳遞

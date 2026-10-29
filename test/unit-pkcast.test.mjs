@@ -266,7 +266,9 @@ describe('R-ID-02 字串型主鍵欄之數字主鍵以字串處置', function() 
                 }
                 assert.strictEqual(err, msg, mode)
                 assert.strictEqual(calls.length, 1, `${mode} ORM被呼叫一次`)
-                assert.ok(logs.some((a) => a.includes(orig)), `${mode} ORM原文進log`)
+                //細節為wsemi之遮罩拷貝(不交出原參照, R-DIAG-01), 以內容判定原文進log
+                let hit = typeof orig === 'string' ? (x) => x === orig : (x) => x !== orig && x instanceof Error && x.message === orig.message
+                assert.ok(logs.some((a) => a.some(hit)), `${mode} ORM原文進log(拷貝)`)
             }
         }
     })

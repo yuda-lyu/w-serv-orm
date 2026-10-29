@@ -221,21 +221,31 @@ describe('診斷輸出之行程標準輸出(真w-orm-lowdb, 子行程; R-DIAG-01
         assert.strict.deepEqual({ ...r.out, funs: undefined }, { ...CONTRACT_TOOLS, funs: undefined })
     })
 
-    it('A05 工具路徑與建構之無效參數(logDetail): 還原舊輸出(stdout含傳入之值), 拋錯訊息不變', function() {
-        //R-DIAG-01 規則3: 正對照
+    it('A05 工具路徑與建構之無效參數(logDetail): stdout含傳入之值(識別、資料值), 但憑證(設定檔之dbPassword、憑證鍵名之值)遮罩; 拋錯訊息不變', function() {
+        //R-DIAG-01 規則3: 正對照; 2026-10-29 mig-servorm起細節為wsemi之遮罩拷貝(dspec D2: 細節遮罩憑證, 識別值不遮)
         let r = runChild('detail', 'tools')
         assert.strict.equal(r.status, 0, r.stderr)
-        assert.ok(r.stdout.includes(SECRET) && r.stdout.includes(PASS), r.stdout)
+        assert.ok(r.stdout.includes(SECRET), r.stdout)
+        let lines = r.stdout.split(/\r?\n/)
+        let st = lines.find((v) => v.startsWith('st '))
+        let url = lines.find((v) => v.startsWith('url '))
+        let gen = lines.find((v) => v.startsWith('tests.funTest and save '))
+        assert.ok(st.includes('dbPassword: \'***\'') && !st.includes(PASS), st)
+        assert.ok(url.includes('password: \'***\'') && url.includes(SECRET) && !url.includes(PASS), url)
+        assert.ok(gen.includes(PASS), `資料列之欄位值(非憑證)不遮: ${gen}`)
         assert.strict.deepEqual({ ...r.out, funs: undefined }, { ...CONTRACT_TOOLS, funs: undefined })
     })
 
-    it('A06 工具路徑與建構之無效參數(funLog): 行程輸出無任何診斷, funLog收型別摘要與原值', function() {
-        //R-DIAG-01 規則3: funLog給予時本套件不寫console(含進度、無效參數、設定檔錯誤)
+    it('A06 工具路徑與建構之無效參數(funLog): 行程輸出無任何診斷, funLog收型別摘要與遮罩後之細節', function() {
+        //R-DIAG-01 規則3: funLog給予時本套件不寫console(含進度、無效參數、設定檔錯誤); 細節之憑證遮罩同A05
         let r = runChild('fun', 'tools')
         assert.strict.equal(r.status, 0, r.stderr)
         assert.strict.equal(r.stdout + r.stderr, '', r.stdout + r.stderr)
         assert.strict.deepEqual(r.out.funs.map((v) => v[0]), ['getSettings catch', 'st', 'getSettings catch', 'ds', 'url', 'fp', 'recover catch', 'woItems', 'recover catch', 'woItems', 'backup catch', 'tests.funTest and save'])
-        assert.ok(JSON.stringify(r.out.funs).includes(SECRET) && JSON.stringify(r.out.funs).includes(PASS), 'funLog收完整細節(原值)')
+        let byLabel = (lb) => r.out.funs.find((v) => v[0] === lb)
+        assert.strict.equal(byLabel('st')[2].dbPassword, '***')
+        assert.deepStrictEqual(byLabel('url')[2], { password: '***', user: SECRET })
+        assert.deepStrictEqual(byLabel('tests.funTest and save')[2], [{ id: SECRET, name: PASS }], '資料列之欄位值(非憑證)不遮')
         assert.strict.deepEqual({ ...r.out, funs: undefined }, { ...CONTRACT_TOOLS, funs: undefined })
     })
 

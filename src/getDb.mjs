@@ -12,14 +12,14 @@ import o2j from 'wsemi/src/o2j.mjs'
 import now2strp from 'wsemi/src/now2strp.mjs'
 import haskey from 'wsemi/src/haskey.mjs'
 import br from './getDbBackupAndRecover.mjs'
-import { getOptLogLoose, getDiag, getBriefErr, cpDetail } from './getDiag.mjs'
+import { genDiag } from './getDiagBrief.mjs'
 
 
 let fdSrv = path.resolve()
 
 
-function genModels(ds, genModelsByTabs, opt = {}, optLog = undefined) {
-    //optLog(選用, 內部): 由recover帶入之診斷選項快照, 不再讀取使用端之opt(其getter可能前後不同); 未給者由opt取(R-DIAG-01)
+function genModels(ds, genModelsByTabs, opt = {}, diag = undefined) {
+    //diag(選用, 內部): 由recover帶入之診斷出口(建構時已取選項快照, 不再讀取使用端之opt, 其getter可能前後不同); 未給者由opt建立(R-DIAG-01)
 
     //fdModels
     let fdModels = get(opt, 'fdModels')
@@ -34,7 +34,9 @@ function genModels(ds, genModelsByTabs, opt = {}, optLog = undefined) {
     }
 
     //diag, 同backup(R-DIAG-01)
-    let diag = getDiag(optLog === undefined ? getOptLogLoose(opt) : optLog)
+    if (!isfun(diag)) {
+        diag = genDiag(opt)
+    }
 
     //names
     let names = keys(ds)
@@ -60,7 +62,7 @@ function genModels(ds, genModelsByTabs, opt = {}, optLog = undefined) {
 
     })
     if (bLog) {
-        diag('tabs', { n: size(tabs), tables: keys(tabs) }, () => cpDetail(tabs)) //預設只列表名, 完整schema設定(可含預設值等)為細節; 交出拷貝, 使用端原地改動不影響其後傳給模型產生器之tabs
+        diag('tabs', { n: size(tabs), tables: keys(tabs) }, () => tabs) //預設只列表名, 完整schema設定(可含預設值等)為細節; diag一律交出遮罩後之拷貝, 使用端原地改動不影響其後傳給模型產生器之tabs
     }
 
     //fd
@@ -81,12 +83,11 @@ async function backup(woItems, opt = {}) {
         bLog = true
     }
 
-    //diag, 失敗時之診斷輸出預設只列錯誤類別(原文含ORM回傳, 為細節), opt.logDetail為true還原完整輸出, opt.funLog收完整細節(R-DIAG-01); 型別錯誤者忽略, 同bLog
-    let optLog = getOptLogLoose(opt)
-    let diag = getDiag(optLog)
+    //diag, 失敗時之診斷輸出預設只列錯誤類別(原文含ORM回傳, 為細節), opt.logDetail為true輸出遮罩後之細節, opt.funLog收遮罩後之細節(R-DIAG-01); 型別錯誤者忽略, 同bLog
+    let diag = genDiag(opt)
 
-    //backup
-    await br.backup(woItems, optLog)
+    //backup, 低階backup之外來值(ORM)已於該處經diag.err; 本函數之外來值為寫檔之錯誤, 以固定詞彙組成之錯誤不經遮罩
+    await br.backup(woItems, diag)
         .then((res) => {
 
             //o2j
@@ -103,15 +104,20 @@ async function backup(woItems, opt = {}) {
             //fp
             let fp = path.resolve(fdSrv, fn)
 
-            //writeFileSync
-            fs.writeFileSync(fp, j, 'utf8')
+            //writeFileSync, 檔案系統之錯誤為外來值, 經diag.err後轉出(R-DIAG-01; 儲存路徑不屬憑證, 不遮)
+            try {
+                fs.writeFileSync(fp, j, 'utf8')
+            }
+            catch (err) {
+                throw diag.err(err)
+            }
 
             if (bLog) {
                 diag('backup finish')
             }
         })
         .catch((err) => {
-            diag('backup catch', getBriefErr(err), () => cpDetail(err), true) //舊版為console.log(err); 交出拷貝, 使用端原地遮罩不改變拋給呼叫端之原錯誤
+            diag('backup catch', diag.brief(err), () => err) //diag交出遮罩後之拷貝, 使用端原地遮罩不改變拋給呼叫端之錯誤
             throw err
         })
 
@@ -134,9 +140,8 @@ async function recover(woItems, fp, opt = {}) {
         bLog = true
     }
 
-    //optLog, diag, 同backup(R-DIAG-01)
-    let optLog = getOptLogLoose(opt)
-    let diag = getDiag(optLog)
+    //diag, 同backup(R-DIAG-01); 外來值(檔案系統、模型產生器、ORM)已於低階recover經diag.err
+    let diag = genDiag(opt)
 
     //funGenModels and bNeedCreateStorage, 若為關聯資料庫則需使用genModels與needCreateStorage=true
     //genModels須以ds與genModelsByTabs產生model, 低階recover則以無參數呼叫, 故以閉包帶入; 缺則於任何寫入之前reject
@@ -147,24 +152,24 @@ async function recover(woItems, fp, opt = {}) {
         let genModelsByTabs = get(opt, 'genModelsByTabs')
         if (!iseobj(ds) || !isfun(genModelsByTabs)) {
             let err = new Error('bRela needs opt.ds and opt.genModelsByTabs')
-            diag('recover catch', getBriefErr(err), () => cpDetail(err), true) //舊版為console.log(err)
+            diag('recover catch', diag.brief(err), () => err)
             return Promise.reject(err)
         }
         funGenModels = () => {
-            genModels(ds, genModelsByTabs, opt, optLog)
+            genModels(ds, genModelsByTabs, opt, diag)
         }
         bNeedCreateStorage = true
     }
 
     //recover
-    await br.recover(fp, woItems, funGenModels, bNeedCreateStorage, optLog)
+    await br.recover(fp, woItems, funGenModels, bNeedCreateStorage, diag)
         .then(() => {
             if (bLog) {
                 diag('recover finish')
             }
         })
         .catch((err) => {
-            diag('recover catch', getBriefErr(err), () => cpDetail(err), true) //舊版為console.log(err)
+            diag('recover catch', diag.brief(err), () => err)
             throw err
         })
 

@@ -5,7 +5,8 @@ import get from 'lodash-es/get.js'
 import isnum from 'wsemi/src/isnum.mjs'
 import isestr from 'wsemi/src/isestr.mjs'
 import iseobj from 'wsemi/src/iseobj.mjs'
-import { getOptLogLoose, getDiag, getBriefErr } from './getDiag.mjs'
+import getDiagSecrets from 'wsemi/src/getDiagSecrets.mjs'
+import { genDiag } from './getDiagBrief.mjs'
 
 
 let fdSrv = path.resolve()
@@ -25,11 +26,12 @@ function getSettings(opt = {}) {
     //fp
     let fp = path.resolve(fdSrv, fn) //`${fdSrv}/${fn}`
 
-    //diag, 設定檔無效時之診斷輸出預設只列設定檔有哪些鍵(設定值含資料庫帳號與密碼), opt.logDetail為true還原完整傾印, opt.funLog收完整細節(R-DIAG-01); 型別錯誤者忽略
-    let diag = getDiag(getOptLogLoose(opt))
-
     //st
     let st = {}
+
+    //diag, 設定檔無效時之診斷輸出預設只列設定檔有哪些鍵(設定值含資料庫帳號與密碼), opt.logDetail為true輸出遮罩後之傾印, opt.funLog收遮罩後之細節(R-DIAG-01); 型別錯誤者忽略
+    //秘密以函數形式宣告: 讀設定檔之後才有連線網址與帳密, 每次輸出時由當下之st導出(與連線網址並列)
+    let diag = genDiag(opt, () => getDiagSecrets({ urls: [get(st, 'dbUrl'), get(st, 'url')], username: get(st, 'dbUsername'), password: get(st, 'dbPassword') }))
     let logSt = () => {
         let ks = iseobj(st) ? Object.keys(st) : []
         diag('st', { keys: ks.filter((v) => KEYS_KNOWN.indexOf(v) >= 0), nOther: ks.filter((v) => KEYS_KNOWN.indexOf(v) < 0).length }, () => st)
@@ -88,7 +90,7 @@ function getSettings(opt = {}) {
     }
     catch (err) {
         //err可為檔案系統錯誤(含檔案路徑)或JSON5解析錯誤, 預設只列錯誤類別; 舊版為console.log(err)
-        diag('getSettings catch', getBriefErr(err), () => err, true)
+        diag('getSettings catch', diag.brief(err), () => err)
         throw new Error('failed to read settings file')
     }
 
