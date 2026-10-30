@@ -2,8 +2,8 @@ import size from 'lodash-es/size.js'
 import take from 'lodash-es/take.js'
 import map from 'lodash-es/map.js'
 import getDiag from 'wsemi/src/getDiag.mjs'
-import getDiagSecrets from 'wsemi/src/getDiagSecrets.mjs'
-import { isProxy, gd, hasOwn } from 'wsemi/src/_diagKit.mjs'
+import isProxy from 'wsemi/src/isProxy.mjs'
+import { SAFE_KEYS } from './safeKeys.mjs'
 
 
 //本套件之診斷宣告(R-DIAG-01, 規格為主控dspec〈診斷輸出與遮罩〉, 實作為wsemi之getDiag系列): 遮罩、細節拷貝、錯誤摘要與出口一律由wsemi處理, 本檔只宣告與提供本套件語意之摘要
@@ -13,9 +13,6 @@ const CODES = ['sqlstate', 'sqlite', 'mysql', 'mssql', 'mongo', 'mongoServer', '
 
 //另讀其code之巢狀錯誤鍵(sequelize之錯誤, 經w-orm-reladb等轉出)
 const NESTED = ['original', 'parent']
-
-//safe會用到之鍵(白名單外之鍵由wsemi丟棄; errType、errCode恆含)
-const SAFE_KEYS = ['n', 'ks', 'skipped', 'ok', 'type', 'reason', 'msgs', 'table', 'tables', 'keys', 'nOther']
 
 //摘要中列出之失敗位置數上限, 同getMapOrm之getMsgFail
 const N_SHOW = 10
@@ -27,16 +24,8 @@ const N_SCAN = 100000
 function genDiag(opt, secrets) {
     //產生本套件之診斷出口: opt為使用端設定(讀其logDetail與funLog, 任何值皆可, 建構時取快照), secrets為秘密清單(getDiagSecrets之結果, 或回傳其之函數, 未給為無)
     //回傳wsemi之diag(label, safe, getDetail, level), 另帶brief、mask、copy、err、with
+    //safeKeys為safe會用到之鍵(白名單外之鍵由wsemi丟棄; errType、errCode恆含), 單一來源為公開之safeKeys.mjs
     return getDiag(opt, { secrets, codes: CODES, nested: NESTED, safeKeys: SAFE_KEYS })
-}
-
-
-function getUrlSecrets(url) {
-    //連線位址之秘密清單: 連線字串(含://或@)列為網址(帳密為憑證, 診斷輸出與對外錯誤值皆遮), 其餘(lowdb、lmdb等之檔案位置)列為儲存路徑(只遮診斷輸出, 對外錯誤值不遮, dspec Q3)
-    if (typeof url === 'string' && url.indexOf('://') < 0 && url.indexOf('@') < 0) {
-        return getDiagSecrets({ paths: [url] })
-    }
-    return getDiagSecrets({ urls: [url] })
 }
 
 
@@ -48,6 +37,15 @@ function getBriefFails(fails) {
             return v !== null && typeof v === 'object' && Number.isInteger(v.k) ? v.k : null
         }),
     }
+}
+
+
+//取描述子與判斷自有鍵一律用內建函數(不執行getter、不觸發陷阱; Proxy由呼叫端先以isProxy排除)
+const gd = Object.getOwnPropertyDescriptor
+
+
+function hasOwn(o, k) {
+    return Object.prototype.hasOwnProperty.call(o, k)
 }
 
 
@@ -145,4 +143,4 @@ function getBriefCount(v) {
 }
 
 
-export { genDiag, getUrlSecrets, getBriefFails, getBriefResult, getBriefType, getBriefCount }
+export { genDiag, getBriefFails, getBriefResult, getBriefType, getBriefCount }

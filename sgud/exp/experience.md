@@ -48,3 +48,14 @@
 - **修前紅用 HEAD 副本**: `git archive HEAD src test schema package.json | tar -x -C tmp/<輪>/head`,再把新測試複製進去;副本內 `import 'wsemi/...'` 依 Node 之上溯解析到 repo 之 `node_modules`,不需連結.mocha 以 `node <repo>/node_modules/mocha/bin/mocha.js` 執行(副本有 package.json 而無 node_modules,`npx` 可能去下載),quiet-run 用 `--cwd` 與 `--log`.`--no-parallel` 時任一檔 import 失敗(如新模組在 HEAD 不存在)會使整批不跑,該檔另跑或改為只 import 公開模組.
 - **變異在副本上做**: 腳本每個變異重新複製 src 至 `tmp/<輪>/mut` 後套用(字串須恰好命中),跑完刪副本;repo 之 src 全程不動,腳本中途失敗也不會留下變異碼.單一 `--lock` 內跑完全部變異(28 個約 3 分鐘).
 - **鎖等待**: 本輪每次 `--lock` 排隊 4～7 分鐘(他套件同時遷移),把「受影響之測試」合併為一次、變異合併為一次、全套一次,其餘時間寫文件.
+
+## a-servorm(2026-10-30 派工,新 session): 只用 wsemi 公開 API、公開 `SAFE_KEYS`(R-DIAG-02)
+
+規則見 `rulebook_diag.md` R-DIAG-02.以下只記往後會再用到的經驗.
+
+- **wsemi 升版後共用語料多出的 wire 案會讓接線測試第一案判紅,這是設計**: 1.9.33 語料新增 A11、C14、U22 三個 wire 案,`unit-diaglog-wire` 的處置表登錄案(「不得有未處置者」)隨即紅;升 wsemi 後第一件事跑該檔,依新案語意逐一登錄處置(本套件三案皆 `own`:改寫成本套件形狀之接線測試),不是放寬計數.
+- **「名單 = 實際產出」的測法: 用記錄替身取過濾前的 safe**: 白名單由 `getDiag` 在內部過濾,從 funLog 只看得到過濾後,漏列的鍵看不見.作法: 把 `src/` 複製到 `test/_tmp/<案>/src`,僅把 `getDiagBrief.mjs` 的 `getDiag` 匯入換成 `test/tools/diagSpy.mjs`(轉交真 `getDiag` 前記下 label 與 safe),其餘位元組相同(複製時斷言字串恰好命中一處).再與下游用法(`genDiagFunLog(write, { safeKeys })`)逐站比對.複製的 src 在 repo 之下,模組解析自然向上找到 `node_modules`,不用連接點.
+- **比對器自證不要拿被測名單當輸入**: 第一版 B4 以 `SAFE_KEYS` 本身當「實際產出」自證,變異「名單多列一鍵」時 B4 也跟著紅(雜訊);改用合成陣列才與名單內容無關.
+- **變異腳本也在 `./tmp` 之下的副本跑**: `tmp/a-servorm/mut/<id>/` 含 `src`、`toolg`、`test/tools`、單一測試檔、`README.md`、`package.json`,以 `spawnSync(node, [mocha.js, ...], { cwd: 副本 })` 執行(測試以 cwd 相對路徑讀 `./src`);修前紅則以 `git ls-tree`＋`git show HEAD:<檔>` 還原 HEAD 的 `src`(Windows 的 `tar -x -C <含磁碟機代號的路徑>` 會把 `C:` 當遠端主機而失敗,`git archive | tar` 不可靠).
+- **非字串 url 的舊新差異要先查呼叫路徑再判退化**: `getUrlSecrets(123)` 舊列 reject、`getDiagSecrets({ conns: [123] })` 為儲存路徑;但 `WServOrm` 對非字串 url 只會 `invalid url` 拒收(E01),秘密只用於該拒收的診斷細節,不列為退化,寫入帳本已知限制.
+- **鎖等待**: 首次 `--lock` 排隊 5 分 51 秒,其後同一輪連續取鎖多半 0～20 秒;把測試合併後再取鎖.

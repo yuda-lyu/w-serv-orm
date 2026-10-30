@@ -3,7 +3,8 @@ import keys from 'lodash-es/keys.js'
 import iseobj from 'wsemi/src/iseobj.mjs'
 import isfun from 'wsemi/src/isfun.mjs'
 import isestr from 'wsemi/src/isestr.mjs'
-import { genDiag, getUrlSecrets, getBriefType } from './getDiagBrief.mjs'
+import getDiagSecrets from 'wsemi/src/getDiagSecrets.mjs'
+import { genDiag, getBriefType } from './getDiagBrief.mjs'
 
 
 function getWoItems(ds, WOrm, url, db, diag = undefined) {
@@ -11,7 +12,7 @@ function getWoItems(ds, WOrm, url, db, diag = undefined) {
 
     //diag
     if (!isfun(diag)) {
-        diag = genDiag(undefined, getUrlSecrets(url))
+        diag = genDiag(undefined, getDiagSecrets({ conns: [url] }))
     }
 
     //check ds

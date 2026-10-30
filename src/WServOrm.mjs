@@ -5,7 +5,8 @@ import isfun from 'wsemi/src/isfun.mjs'
 import checkOptRemoved from './checkOptRemoved.mjs'
 import { checkContract, compareBaseline } from './baseline.mjs'
 import getDbBackupAndRecover from './getDbBackupAndRecover.mjs'
-import { genDiag, getUrlSecrets } from './getDiagBrief.mjs'
+import getDiagSecrets from 'wsemi/src/getDiagSecrets.mjs'
+import { genDiag } from './getDiagBrief.mjs'
 import getWoItems from './getWoItems.mjs'
 import getMapOrm from './getMapOrm.mjs'
 import getProc from './getProc.mjs'
@@ -178,7 +179,7 @@ function WServOrm(ds, WOrm, url, db, opt = {}) {
     let optLog = getOptLog(opt)
 
     //diag, 本實例之診斷出口(wsemi之getDiag, 交固定快照optLog); 秘密為連線位址(連線字串之帳密, 或檔案位置之儲存路徑), 各路徑(建構、procOrm、backup、recover、closeAll)共用
-    let diag = genDiag(optLog, getUrlSecrets(url))
+    let diag = genDiag(optLog, getDiagSecrets({ conns: [url] }))
 
     //getWoItems
     let woItems = getWoItems(ds, WOrm, url, db, diag)

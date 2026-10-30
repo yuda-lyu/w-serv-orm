@@ -6,6 +6,7 @@ import diagCases from 'wsemi/src/_diagCases.mjs'
 import genDiagFunLog from 'wsemi/src/genDiagFunLog.mjs'
 import WServOrm from '../src/WServOrm.mjs'
 import getDb from '../src/getDb.mjs'
+import { SAFE_KEYS } from '../src/safeKeys.mjs'
 import genTestData from '../src/genTestData.mjs'
 import { addHook } from './tools/hookKit.mjs'
 
@@ -48,6 +49,9 @@ let WIRE = {
     R12: 'R+D',
     A01: 'A',
     A07: 'A',
+    A11: 'own 語料驗genDiagFunLog之opt.safeKeys; 本套件之下游以公開之SAFE_KEYS(src/safeKeys.mjs)為其值, 以語料之safe樣本(含憑證鍵名)驗名單外之鍵被丟棄、本套件之鍵原樣轉寫; 與實際產出一致見unit-diagsafe',
+    C14: 'own 語料驗getDiagBriefErr之types(宣告時列驅動類別名); 本套件可搭配任一w-orm-*而不宣告驅動之類別名, 以語料之pg DatabaseError(實例name為error)經procOrm之catch站點驗未宣告為Error、集合外之實例name不列',
+    U22: 'own 語料驗getDiagSecrets之conns分類; 本套件每實例一個url(連線字串或儲存路徑), 以語料之secrets().url與secrets().path各建一實例, 驗診斷細節與對外錯誤值之遮罩分類(取代原getUrlSecrets)',
 }
 
 
@@ -164,12 +168,12 @@ describe('diaglog-wire(R-DIAG-01接線)', function() {
             //dspec D5: 各套件之接線測試以同一語料跑其宣告之路徑; 新增之wire案須先登錄處置
             let ids = diagCases.cases.filter((c) => c.wire).map((c) => c.id).sort()
             assert.deepStrictEqual(ids, Object.keys(WIRE).sort())
-            assert.strictEqual(ids.length, 20)
+            assert.strictEqual(ids.length, 23)
             let kinds = {}
             Object.values(WIRE).forEach((v) => {
                 kinds[v.split(' ')[0]] = (kinds[v.split(' ')[0]] || 0) + 1
             })
-            assert.deepStrictEqual(kinds, { 'D': 9, 'S': 1, 'L': 1, 'static': 1, 'R': 2, 'own': 1, 'R-fixed': 1, 'R+D': 2, 'A': 2 })
+            assert.deepStrictEqual(kinds, { 'D': 9, 'S': 1, 'L': 1, 'static': 1, 'R': 2, 'own': 4, 'R-fixed': 1, 'R+D': 2, 'A': 2 })
         })
 
         for (let id of Object.keys(WIRE).filter((k) => WIRE[k] === 'D')) {
@@ -238,15 +242,12 @@ describe('diaglog-wire(R-DIAG-01接線)', function() {
             assert.strictEqual(cap.logs[0][1].message, 'auth ***')
         })
 
-        it('[靜態] O15 safe白名單: 本套件之getDiag只在getDiagBrief.mjs建立一次並宣告safeKeys, 白名單不含憑證鍵名', function() {
-            //dspec §6.7第4點: 宣告safeKeys, 白名單外之鍵丟棄; 憑證鍵名之單一出處為wsemi之CRED_KEY_SRC
+        it('[靜態] O15 safe白名單: 本套件之getDiag只在getDiagBrief.mjs建立一次並宣告safeKeys(單一來源為公開之safeKeys.mjs), 白名單不含憑證鍵名', function() {
+            //dspec §6.7第4點: 宣告safeKeys, 白名單外之鍵丟棄; 憑證鍵名之單一出處為wsemi之CRED_KEY_SRC; 名單內容與實際產出之鍵一致由unit-diagsafe以實際產出比對
             let code = srcOf('getDiagBrief.mjs')
             assert.strictEqual(count(code, /getDiag\(opt, \{ secrets, codes: CODES, nested: NESTED, safeKeys: SAFE_KEYS \}\)/g), 1)
-            let m = code.match(/const SAFE_KEYS = \[([^\]]*)\]/)
-            assert.ok(m !== null)
-            let ks = m[1].split(',').map((s) => s.trim().replace(/'/g, ''))
-            assert.deepStrictEqual(ks, ['n', 'ks', 'skipped', 'ok', 'type', 'reason', 'msgs', 'table', 'tables', 'keys', 'nOther'])
-            ks.forEach((k) => {
+            assert.ok(SAFE_KEYS.length > 0)
+            SAFE_KEYS.forEach((k) => {
                 assert.ok(!/password|passwd|pwd|secret|token|authorization|api[_-]?key|x-api-key|__sysToken__/i.test(k), k)
             })
             for (let f of fs.readdirSync(path.resolve('./src')).filter((v) => v.endsWith('.mjs') && v !== 'getDiagBrief.mjs')) {
@@ -330,6 +331,56 @@ describe('diaglog-wire(R-DIAG-01接線)', function() {
             assert.strictEqual(await getReject(so.procOrm('u1', 'tests', 'save', [{ id: 'a' }])), 'failed to save data')
             assert.deepStrictEqual(nArgs, [2])
             assert.deepStrictEqual(rs, [{ event: 'x-diag', label: 'tests.save catch', safe: { errType: 'Error' } }])
+        })
+
+        it('A11 下游以SAFE_KEYS宣告genDiagFunLog之safeKeys: 本套件之鍵(含errType、errCode)原樣轉寫, 名單外之鍵(含憑證鍵名、巢狀)丟棄', function() {
+            //dspec §6.8、語料A11: safeKeys為轉接器寫入日誌前之第二道防線; 名單為本套件公開之SAFE_KEYS
+            let ctx = mkCtx()
+            let sample = getCase('A11').make(ctx) //{ n, ks, password, errType, errCode, sub }
+            let rs = []
+            genDiagFunLog((o) => rs.push(o), { safeKeys: SAFE_KEYS }).funLog('lb', sample)
+            assert.deepStrictEqual(rs, [{ event: 'orm-diag', label: 'lb', safe: { n: 1, ks: [0], errType: 'Error', errCode: '23505' } }])
+            assert.ok(!JSON.stringify(rs).includes(ctx.sec.password))
+        })
+
+        it('C14 真驅動形態(pg之DatabaseError, 實例name為error): 本套件不宣告驅動類別名, errType為Error; 集合外之實例name不列; errCode依宣告之sqlstate', async function() {
+            //dspec §3.3、§6.6、語料C14: 類別名只列內建或宣告者(未宣告types); 本套件可搭配任一w-orm-*, 不替驅動宣告類別名
+            let ctx = mkCtx()
+            let e = getCase('C14').make(ctx)
+            assert.strictEqual(e.name, 'error')
+            let { fun } = await viaOrmCatch(ctx.sec.url, e)
+            assert.deepStrictEqual(fun[0][1], { errType: 'Error', errCode: '23505' })
+            let leak = Object.assign(e, { name: 'Alice01Leak' })
+            let { fun: fun2 } = await viaOrmCatch(ctx.sec.url, leak)
+            assert.deepStrictEqual(fun2[0][1], { errType: 'Error', errCode: '23505' })
+            let { fun: fun3 } = await viaOrmCatch(ctx.sec.url, Object.assign(new TypeError('x'), { name: 'Alice01Leak' }))
+            assert.deepStrictEqual(fun3[0][1], { errType: 'Error' })
+        })
+
+        it('U22 連線位址分類(getDiagSecrets({ conns: [url] }), 取代原getUrlSecrets): 連線字串之憑證於診斷細節與對外錯誤值皆遮, 儲存路徑只遮診斷細節(Q3)', async function() {
+            //dspec §6.2、Q3、語料U22: 含://或@者為連線字串(帳密為憑證), 其餘為儲存路徑(對外錯誤值不遮); 兩種url各建一實例
+            let ctx = mkCtx()
+            let pw = ctx.sec.password
+            let p = ctx.sec.path
+
+            //連線字串
+            let eUrl = new Error(`auth ${pw} via ${ctx.sec.url}`)
+            let fun = []
+            let so = WServOrm(DS, mkWOrm({ save: () => Promise.reject(eUrl) }), ctx.sec.url, 'db', { funLog: (...a) => fun.push(a) })
+            await getReject(so.procOrm('u1', 'tests', 'save', [{ id: 'a' }]))
+            assert.ok(fun[0][2] instanceof Error && !fun[0][2].message.includes(pw) && !fun[0][2].message.includes(ctx.sec.url), fun[0][2].message)
+            let errUrl = await viaHook(ctx.sec.url, eUrl)
+            assert.ok(errUrl instanceof Error && errUrl !== eUrl && !errUrl.message.includes(pw) && !errUrl.message.includes(ctx.sec.url) && errUrl.message.includes('***'), errUrl.message)
+
+            //儲存路徑(lowdb、lmdb等之url)
+            let ePath = Object.assign(new Error(`ENOENT: no such file or directory, open '${p}'`), { code: 'ENOENT' })
+            let fun2 = []
+            let so2 = WServOrm(DS, mkWOrm({ save: () => Promise.reject(ePath) }), p, 'db', { funLog: (...a) => fun2.push(a) })
+            await getReject(so2.procOrm('u1', 'tests', 'save', [{ id: 'a' }]))
+            assert.ok(fun2[0][2] instanceof Error && !fun2[0][2].message.includes(p) && fun2[0][2].message.includes('***'), fun2[0][2].message)
+            let errPath = await viaHook(p, ePath)
+            assert.strictEqual(errPath, ePath, '對外錯誤值不遮儲存路徑, 無應處理者身分不變')
+            assert.ok(errPath.message.includes(p))
         })
 
     })

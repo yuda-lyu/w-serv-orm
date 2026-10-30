@@ -62,6 +62,21 @@ WServOrm(ds, WOrm, url, db, opt) // opt.logDetail、opt.funLog 皆選用
 * 工具路徑同樣處理，選項寫在各函數既有的 `opt`，**型別錯誤者忽略並用預設**(與同處的 `bLog` 一致)：`getDb.backup(woItems, opt)`、`getDb.recover(woItems, fp, opt)` 失敗時預設只輸出 `{ errType }`(`logDetail` 為 `true` 時為 `console.log('backup catch'或'recover catch', 細節)`)；`getDb.recover` 的 `bRela` 路徑傾印 schema 預設只列表名 `{ n, tables }`；`WServOrm(...)` 實例上的 `backup(woItems)`、`recover(fp, woItems, genModels, needCreateStorage)` 參數不變(各實例的函數身分不同)，診斷輸出依該實例的 `opt`；`genTestData(ds, woItems, opt)` 於 `bLog` 為真(預設)時預設只輸出 `{ n: 筆數 }`(非真陣列為 `null`)而不列資料列；`getSettings(opt)` 設定檔無效時預設只輸出已知設定鍵名與未知鍵的個數 `{ keys, nOther }`，不傾印設定值，`logDetail`/`funLog` 之細節中之資料庫帳號、密碼與連線網址遮罩(秘密由讀入之設定導出)，讀取或解析錯誤(可含檔案路徑)預設只列錯誤類別。工具路徑(`getDb`、`genTestData`)無連線網址可宣告，其細節與對外錯誤值只依 wsemi 之網址帳密、憑證鍵值對與 Bearer 樣式遮罩；實例上之 `backup`、`recover` 依該實例之 `url`。
 * 使用端建議：**w-web-* 等會把行程標準輸出交給 pm2 或容器收集的服務，建議以 `opt.funLog` 接管**，伺服端以 wsemi `genDiagFunLog(write)` 之 `funLog` 傳入即只寫安全摘要(`{ event: 'orm-diag', label, safe }`，不取細節)；不需要細節者不傳任何選項即可，預設已不含個資。已知差異：`procOrm` 逐筆失敗的 **reject 訊息**(如 `failed to save data: id[...]`)列主鍵(識別值，回傳契約)，仍會隨 reject 交給呼叫端，使用端須自行處理其落地。
 
+### 公開 `SAFE_KEYS`(本套件 funLog 所產生之安全摘要的鍵名單)
+
+下游伺服端(w-web-sso、w-web-api、w-web-task、w-web-perm 等)以 wsemi 之 `genDiagFunLog(write, { safeKeys })` 接管本套件之 `opt.funLog` 時，`safeKeys` 應傳本套件公開的 `SAFE_KEYS`：它是本套件 `safe`（上表）頂層鍵的**單一來源**（本套件自身的 `getDiag` 亦以它為白名單），使轉寫至伺服器日誌的 `safe` 只含本套件宣告之鍵（`errType`、`errCode` 由 wsemi 恆含，不列於名單）。**下游不得深層匯入本套件的內部檔**（如 `src/getDiagBrief.mjs`）。
+
+```js
+import genDiagFunLog from 'wsemi/src/genDiagFunLog.mjs'
+import { SAFE_KEYS } from 'w-serv-orm/src/safeKeys.mjs'
+
+let { funLog } = genDiagFunLog(write, { safeKeys: SAFE_KEYS }) // write(o)：o 為 { event, label, safe }
+let so = WServOrm(ds, WOrm, url, db, { funLog })
+```
+
+* `SAFE_KEYS` 為凍結的字串陣列（目前為 `n ks skipped ok type reason msgs table tables keys nOther`），模組零 import（`w-serv-orm/src/safeKeys.mjs`，與 `baseline.mjs` 同為深層匯入之公開子模組）；名單內容以測試（`test/unit-diagsafe.test.mjs`）對本套件各站點**實際產出**之鍵雙向比對，新增 `safe` 鍵須同步登錄於此，否則該測試判紅。
+* 名單外的鍵（含憑證鍵名與巢狀物件之鍵）於產生端與轉寫端皆被丟棄，不會進入伺服器日誌。
+
 ### 對外錯誤值(reject、throw)不含連線憑證
 
 * **外來值**(ORM、檔案系統、ORM 建構子、擴充函數〔check、前處理、後處理〕、`genTestData` 之 `funTest`/`funTestAndSave`/`hookFunTestData`、`recover` 之模型產生器拋出或 reject 之值)於本套件之 catch 站點經 wsemi `diag.err`：含本實例連線憑證(連線字串整串、密碼、`帳:密`、查詢參數之秘密值等)、網址帳密或憑證鍵值對者，改為**同類別之副本**(`instanceof` 與 `code` 等自有屬性保留，訊息之憑證為 `***`，呼叫端原物件不被改動)；無須處理者回**原物件**(身分不變)。只遮憑證：單獨帳號、儲存路徑(`err.path`)、主鍵等識別值不遮。
@@ -71,6 +86,10 @@ WServOrm(ds, WOrm, url, db, opt) // opt.logDetail、opt.funLog 皆選用
 
 ## Breaking changes
 
+* **2026-10-30(診斷輸出收斂為 wsemi 公開 API;wsemi ≥ 1.9.33)**：
+  * **刪除 `src/getDiagBrief.mjs` 匯出之 `getUrlSecrets(url)`**：改為 wsemi 的 `getDiagSecrets({ conns: [url] })`（連線字串〔含 `://` 或 `@`〕列為網址，其餘〔檔案型資料庫之位置〕列為儲存路徑，與舊函數結果相同）。原深層匯入 `w-serv-orm/src/getDiagBrief.mjs` 取 `getUrlSecrets` 者（w-web-task 之 `server/genDiag.mjs`、w-web-perm 之 `server/maskRaw.mjs`）須改用 `getDiagSecrets({ conns })`；`getDiagBrief.mjs` 為本套件內部檔，不再提供給下游。
+  * **公開 `SAFE_KEYS`**：`import { SAFE_KEYS } from 'w-serv-orm/src/safeKeys.mjs'`（用途與用法見上節〈公開 `SAFE_KEYS`〉）。
+  * 本套件不再匯入 wsemi 之底線內部檔（`_diagKit.mjs`）：`isProxy` 改用 wsemi 公開之 `wsemi/src/isProxy.mjs`，描述子與自有鍵判斷改用內建 `Object.getOwnPropertyDescriptor`、`Object.prototype.hasOwnProperty.call`。
 * **2026-10-29(診斷輸出改用 wsemi 共用模組;wsemi ≥ 1.9.31)**：
   * `opt.logDetail`、`opt.funLog` 之細節**開始遮罩連線憑證**(舊版原樣，含 `getSettings` 之 `dbPassword`)，且一律為拷貝(舊版部分站點交 `funLog` 原參照)；拷貝不再沿用使用端之原型(類別實例之副本為一般物件，錯誤之副本為內建錯誤類別)，形態標記依 wsemi `maskDiagCopy`(如 `Promise` 為 `[Promise]`、無法讀取之 `stack` 為 `[Stack unavailable]`)。
   * `logDetail` 之輸出一律為 `console.log(標籤, 細節)`：舊版 `getDb.backup`/`getDb.recover` 失敗、`getSettings` 讀取失敗之 `console.log(err)`(無標籤)改為帶標籤(`backup catch`、`recover catch`、`getSettings catch`)。
