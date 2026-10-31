@@ -74,6 +74,25 @@ function genModels(ds, genModelsByTabs, opt = {}, diag = undefined) {
 }
 
 
+/**
+ * 備份各資料表至檔案(公開子模組，見README〈公開子模組〉)
+ *
+ * 各表以select取全部數據，寫入「模組載入時之工作目錄」(載入後改變cwd不影響)下之backup-時間.json，內容為[{ name, data }, ...]；成功resolve undefined，失敗印診斷輸出後reject(外來錯誤之連線憑證已遮罩)，令呼叫端(含未await之頂層腳本)可偵測。
+ * 診斷輸出依opt.bLog、opt.logDetail、opt.funLog(型別錯誤者忽略並用預設)，見README〈Diagnostic output〉。
+ *
+ * @param {Object} woItems 輸入各資料表ORM實例物件(如WServOrm回傳物件之woItems)
+ * @param {Object} [opt={}] 輸入設定物件，預設{}
+ * @param {Boolean} [opt.bLog=true] 輸入是否輸出進度與完成訊息，預設true
+ * @param {Boolean} [opt.logDetail=false] 輸入失敗時是否輸出含細節(連線憑證已遮罩)之診斷，預設false
+ * @param {Function} [opt.funLog] 輸入使用端提供之紀錄函式(label, safe, detail)，給予時診斷輸出只交給它
+ * @returns {Promise<undefined>} 回傳Promise，成功resolve undefined，失敗reject
+ * @example
+ *
+ * import getDb from 'w-serv-orm/src/getDb.mjs'
+ *
+ * await getDb.backup(woItems) //寫出./backup-時間.json
+ *
+ */
 async function backup(woItems, opt = {}) {
     //備份各資料表至cwd(模組載入時之工作目錄)下之backup-時間.json; 失敗時印log後reject原錯誤, 令呼叫端(含未await之頂層腳本)可偵測
 
@@ -124,6 +143,30 @@ async function backup(woItems, opt = {}) {
 }
 
 
+/**
+ * 由備份檔以insert還原各資料表(公開子模組，見README〈公開子模組〉)
+ *
+ * 參數順序(woItems, fp, opt)與WServOrm實例上之recover(fp, woItems, genModels, needCreateStorage)不同。逐表寫入，主鍵已存在者略過，故資料表須先清空；備份檔不存在或內容無效(須為非空陣列且各筆之name為woItems內之資料表)於任何寫入之前reject；中途失敗(含insert回報ok為0，見README〈Rows〉)於該表停止，先前之表已寫入、之後之表不寫入。
+ * 關聯資料庫(opt.bRela為true)須提供opt.ds與opt.genModelsByTabs以產生model，缺則於任何寫入之前reject。診斷輸出依opt.bLog、opt.logDetail、opt.funLog(型別錯誤者忽略並用預設)，見README〈Diagnostic output〉。
+ *
+ * @param {Object} woItems 輸入各資料表ORM實例物件(如WServOrm回傳物件之woItems)
+ * @param {String} fp 輸入備份檔路徑字串
+ * @param {Object} [opt={}] 輸入設定物件，預設{}
+ * @param {Boolean} [opt.bRela=false] 輸入是否為關聯資料庫，預設false
+ * @param {Object} [opt.ds] 輸入資料表設定物件，bRela為true時必給
+ * @param {Function} [opt.genModelsByTabs] 輸入依資料表設定產生model之函數(fd, tabs)，bRela為true時必給
+ * @param {String} [opt.fdModels='./models'] 輸入model輸出資料夾，預設'./models'
+ * @param {Boolean} [opt.bLog=true] 輸入是否輸出進度與完成訊息，預設true
+ * @param {Boolean} [opt.logDetail=false] 輸入失敗時是否輸出含細節(連線憑證已遮罩)之診斷，預設false
+ * @param {Function} [opt.funLog] 輸入使用端提供之紀錄函式(label, safe, detail)，給予時診斷輸出只交給它
+ * @returns {Promise<undefined>} 回傳Promise，成功resolve undefined，失敗reject
+ * @example
+ *
+ * import getDb from 'w-serv-orm/src/getDb.mjs'
+ *
+ * await getDb.recover(woItems, './backup-20260101T000000.json')
+ *
+ */
 async function recover(woItems, fp, opt = {}) {
     //由備份檔以insert還原各資料表; 主鍵已存在者略過, 故資料表須先清空; 逐表寫入, 中途失敗(含insert回報ok為0, 見isOrmFail)時先前之表已寫入, 之後之表不寫入
     //失敗時印log後reject原錯誤; bRela為true時須提供opt.ds與opt.genModelsByTabs以產生model

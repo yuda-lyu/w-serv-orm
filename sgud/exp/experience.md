@@ -39,6 +39,20 @@
 - **鎖排隊是本輪最大成本**: 他套件的負載試驗以獨佔鎖串成 40~60 分鐘的長鏈,`--lock-exclusive` 搶鎖是競爭而非先進先出,有獨佔者排隊時一般 `--lock` 不取新槽(含自己的獨佔請求在排隊時).對策: (1) 開工第一件事就把改造前基準丟進佇列,排隊期間只寫碼、不跑測試;(2) 之後把「改動測試 -> eslint -> 全套 -> 改造前測試對新 src -> 變異 -> 負載試驗」合併為**單一**獨佔鎖內的腳本(`tmp/tm-servorm/session.mjs`),第一步失敗即停以釋放鎖;(3) 獨佔鎖內**不可**再呼叫 `quiet-run --lock-exclusive`(巢狀會與自己死結),直接呼叫 `loadTrial.mjs`;(4) 腳本於取得鎖時才載入,故排隊期間仍可修改其步驟.
 - **全域技能於執行中被同步更新**: 開工時 `role-coder-for-test` 尚無 §8 與 `references/timer-tests.md`,第 3 小時才出現;以 dspec 為準開工,收尾前補讀細則核對(五種回調案、變異對照舊測試、負載試驗次數 8~10 次;本輪後測為 6/6/5,因排隊耗時,前測為 10/10/5).
 
+## pubmod-servorm(2026-10-31 派工,新 session): 公開子模組清單(R-PUBMOD-01)
+
+規則、盤點與逐模組判定見 `rulebook_pubmod.md`.以下只記往後會再用到的經驗.
+
+- **盤下游匯入站點要用「真實 import」式樣,並以 count 模式驗站數**: 寬鬆式(`w-serv-orm/src/xxx.mjs` 加 `from` 或 `import(`)改動前得 93 處(本輪於 `src/` 加 JSDoc 範例後為 97),其中含 5 處註解、模板字串(w-web-api 以探針改寫被測原文,模板內有 `import … from 'w-serv-orm/src/WServOrm.mjs'`)、斷言字串(w-web-perm 之 `code.includes(\`from '…'\`)`)、JSDoc 範例,誤把 `api-ormDiagSafeKeys.test.mjs` 算成有 import;嚴格式(行首 `import … from` 或 `} from`,另加 `= await import(`)得 88 站/66 檔,與逐檔加總相符.往後盤「誰 import 我」:先寬後嚴,兩式之差逐筆看是註解還是字串,最後以 `output_mode: count` 之總數核對自己的加總.
+- **「單一來源」要有一個會判紅的比對者,且比對者自己也要被變異**: 清單放 README 表(人讀得到),解析與檢核寫成純函數(`test/tools/publicMods.mjs`,不讀檔,收文字與檔案清單),測試除比對真實 README 外,把 README 文字變異(缺段、少列、指向不存在之檔、同檔跨兩表、匯入路徑錯、匯出欄空、欄數錯、內部檔無理由、重複列)餵給同一函數驗證它會報(A3);否則「檢核永遠回空陣列」之缺陷看不出來.表格式用「欄內不得含直立線」換取簡單解析.
+- **公開表要求匯出欄與實際匯出逐名相等(含 `default`)**: 比只檢「檔存在」強,README 多寫或少寫一個匯出(M11、M20、M21)都紅;零成本取得 `Object.keys(namespace)`.
+- **契約案只測 README 承諾之範圍,深度行為留給既有測試**: `checkOptRemoved`、`getDb`、`genTestData` 之行為既有測試已有(`unit-WServOrm` I13、`unit-getDb`、`unit-mapOrm`),新契約案(O、G、T)只驗 README 寫下的句子(接受值、訊息起首、鍵序、落點為模組載入時 cwd、模式、停止條件);因此有一個變異(M09: 拿掉 `genTestData` 之逐筆失敗檢查)對契約層是等價(同一失敗由聚合檢查接手,訊息起首相同,只有本文不同),由既有 `unit-mapOrm` 殺死——變異腳本對這類要寫明「契約層等價 + 何檔殺死」,不要硬加斷言去殺(會把 README 沒承諾之訊息本文變成承諾).
+- **「落點為模組載入時之工作目錄」要用子行程驗**: `getDb` 以 `path.resolve()` 於載入時取 cwd;測試在子行程內匯入後才 `process.chdir()` 再備份,檔案仍在原夾而非新 cwd(M07 變異殺死);一般 in-process 測試無從驗此承諾.
+- **不升格之判定要附「等價」之實證,不只說「有公開路徑」**: `getMapOrm`/`getProc` 之下游用法有二,各以測試證明公開路徑等價: I1 對同一操作序列(insert、save、select、del、被拒之條件)兩路徑回傳逐項相同且 `memOrm` 末態相同,I2 對 3 鍵 × 9 值 `getProc`、`checkOptRemoved`、`WServOrm` 建構三路徑之拋錯訊息逐值相同.下游遷移時若 oracle 與被測同源(w-web-sso 之 `getIgnoredOrmKeys` 內部即呼叫 `checkOptRemoved`,其 IOK-007 不可再以 `checkOptRemoved` 當 oracle),宜用 `WServOrm` 建構之拋錯當獨立判準.
+- **變異腳本在 `./tmp/` 之副本內跑 mocha,不需 junction**: 把 `src`、README、新測試與其工具複製到 `tmp/servorm/mut/<id>/`,副本內依賴由上層 repo 之 `node_modules` 逐層向上解析;倉庫工作樹為 CRLF,複製後先 LF 正規化再套用 LF 撰寫之變異字串;每個變異先檢查 `from` 字串於檔內恰出現一次(否則標 NOT_APPLIED 而非靜默通過);對照組 M00 須 0 失敗;腳本整批由單一 `quiet-run --lock` 包住.副本內若要跑既有測試(如 M09 之 `unit-mapOrm`)須一併複製 `schema/` 與 `test/tools/`,否則 mocha 因載入失敗輸出 0 案而被誤判「存活」——腳本對 0 案要標 ERROR.
+- **Edit 工具對 CRLF 檔保留行尾**(README、`src/getDb.mjs` 工作樹為 CRLF,git 索引為 LF,`core.autocrlf=true`): 多行 `new_string` 插入後全檔仍每行皆 `\r`;Write 新建之檔為 LF(與 `unit-diagsafe.test.mjs` 同,git 正規化後無差).
+- **eslint `brace-style` 不容許單行 `async () => { a; b }`**: 測試夾具裡之單行箭頭函數區塊(如 `save: async () => { log.push('x') }`)須展開成多行,否則 16 個錯誤;`npx eslint src/*.mjs test/*.mjs test/tools/*.mjs schema/*.mjs` 為本套件之檢查範圍(不含 `g-mOrm.mjs`,該檔不存在).
+
 ## mig-servorm(2026-10-29 派工,新 session): 診斷輸出遷移至 wsemi 共用模組(R-DIAG-01)
 
 - **wsemi 之 safe 正規化只收純物件**: 舊站點以字串(`diag('backup...', k)`)或陣列(`[...msgsBadKey]`)當 safe,遷移後整個摘要靜默消失(預設輸出只剩標籤).遷移時先 Grep 全部 `diag(` 之第 2 引數,非物件者改為 `{ table }`、`{ msgs }` 並宣告於 `safeKeys`;S04 之語法白名單同步改,變異 M27 以 T03 之 `{ table }` 斷言殺死.

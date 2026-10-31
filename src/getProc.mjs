@@ -109,7 +109,7 @@ async function procOrm(st, userId, woName, mode, input, opt) {
 
 
 function getProc(mapOrm, opt = {}, diag = undefined) {
-    //mapOrm為getMapOrm之回傳函數, opt目前無設定鍵, 只檢查已移除之設定; 使用端有直接呼叫者(如測試以getMapOrm與getProc組出procOrm), 故檢查與WServOrm一致
+    //mapOrm為getMapOrm之回傳函數, opt目前無設定鍵, 只檢查已移除之設定, 檢查與WServOrm一致; 本檔為內部檔, 不屬公開子模組(README〈公開子模組〉): 下游測試組真實procOrm請傳替身WOrm給WServOrm, 探測已移除之設定請用checkOptRemoved
     //diag(選用, 內部)為WServOrm實例之診斷出口, 擴充函數之reject經其diag.err(R-DIAG-01); 未給者原樣轉出
     //建構期之錯誤一律為Error, 與procOrm之字串reject區隔
 

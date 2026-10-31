@@ -11,6 +11,52 @@ An operator for orm in server.
 ## Documentation
 To view documentation or get support, visit [docs](https://yuda-lyu.github.io/w-serv-orm/WServOrm.html).
 
+## 公開子模組(Public submodules)
+下游(w-web-sso、w-web-api、w-web-task、w-web-perm 等)對本套件之深層匯入(`w-serv-orm/src/<檔>.mjs`)**只限下表〈公開(可深層匯入)〉所列之檔**；`src/` 下其餘 `.mjs` 皆為**內部檔**(見〈內部檔〉表)，不保證穩定(簽名、匯出與行為可於任何版本改動，且不列入 Breaking changes)，下游不得匯入。
+
+本節之兩張表為「公開子模組清單」之**單一來源**：測試 `test/unit-publicmods.test.mjs` 把表與 `src/*.mjs` 實際檔案逐一比對(每個檔恰屬一表、匯入路徑與匯出名稱須與實際一致、每個公開子模組須有契約案)，新增、移除或改名任一 `src/*.mjs` 須同步更新本節，否則該測試判紅。
+
+**穩定性承諾**(適用於公開表之各檔)：匯出名稱、參數、回傳值與錯誤語意不變；須改動時先列入下節〈Breaking changes〉再改。僅表中「穩定性承諾」欄所載之範圍受保證(例如錯誤訊息只保證起首之固定句，其後之提示句不在內)。
+
+### 公開(可深層匯入)
+
+| 檔 | 匯入路徑 | 匯出 | 用途 | 穩定性承諾 |
+|---|---|---|---|---|
+| `src/WServOrm.mjs` | `w-serv-orm/src/WServOrm.mjs` | `default` | 主入口：`WServOrm(ds, WOrm, url, db, opt)` 建立伺服器端 ORM 支援物件(`procOrm`、`withTabLocks`、`guardWrite`、擴充函數等) | 建構參數與回傳物件之成員(`woItems`、`procOrm`、`withTabLocks`、`guardWrite`、`addFunCheck`、`addFunPreProcessing`、`addFunPostProcessing`、`closeAll`、`backup`、`recover`)穩定，`opt` 之鍵依 JSDoc；`WOrm` 可傳替身(建構函數，收 `{ url, db, cl }`，回該表之實例)而不碰資料庫(測試用，見下〈測試組真實 procOrm〉) |
+| `src/baseline.mjs` | `w-serv-orm/src/baseline.mjs` | `digestRow`、`buildBaseline`、`compareBaseline`、`checkContract`、`isBaselineValid`、`pickWriteRow`、`getRejectKey`、`cyrb53`、`BASELINE_VERSION`、`BASELINE_REJECT` | 純函數(零 import、前後端同構)：多人同時編輯之基準(摘要、比對)與寫入契約檢核，可由瀏覽器端深層匯入；詳見〈Concurrent editing〉 | 摘要演算法版本 `h1` 凍結(同一列同一契約算出同一摘要)；零 import 且語法限 ES2017 以內；匯出名稱與簽名穩定 |
+| `src/safeKeys.mjs` | `w-serv-orm/src/safeKeys.mjs` | `SAFE_KEYS` | 本套件 funLog 所產生之 `safe` 頂層鍵名單，下游 `genDiagFunLog(write, { safeKeys: SAFE_KEYS })` 之單一來源(見〈公開 `SAFE_KEYS`〉) | 凍結之字串陣列、零 import；名單新增鍵不視為破壞，刪除或改名列入 Breaking changes |
+| `src/checkOptRemoved.mjs` | `w-serv-orm/src/checkOptRemoved.mjs` | `default` | 包裝層(如 w-web-*)於建構自身之前，預先檢查 `opt` 是否帶有本套件已移除之設定(`useCheckUser`、`getUserById`、`useExcludeWhenNotAdmin`)；判準與訊息之單一擁有者為本套件(`WServOrm` 建構亦呼叫同一函數) | 同步；上述三鍵之值為 `undefined`、`null`、`false` 者通過(回傳 `undefined`)，其他值拋 `Error`，訊息起首為 `opt.<鍵> has been removed, `(其後之提示句不在承諾內)；多鍵違規時依 `useCheckUser`、`getUserById`、`useExcludeWhenNotAdmin` 之序報第一個；只看這三鍵、不改動 `opt`；受檢鍵之增減列入 Breaking changes |
+| `src/getDb.mjs` | `w-serv-orm/src/getDb.mjs` | `default` | 離線維運工具(如各 w-web-* 根目錄之 `g_backupDb.mjs`)：`getDb.backup(woItems, opt)` 備份各資料表至檔案，`getDb.recover(woItems, fp, opt)` 由備份檔以 `insert` 還原(參數順序與 `WServOrm` 實例上之 `recover(fp, woItems, ...)` 不同) | `backup` 寫出 `backup-時間.json`，落於**模組載入時**之工作目錄(載入後改變 cwd 不影響)，成功 resolve `undefined`，失敗 reject(外來錯誤之連線憑證已遮罩，見〈對外錯誤值〉)；`recover` 於備份檔不存在或內容無效時 reject，逐表 `insert` 失敗之語意見〈Rows〉；`opt.bRela`、`opt.ds`、`opt.genModelsByTabs`、`opt.fdModels`、`opt.bLog`、`opt.logDetail`、`opt.funLog` 見 JSDoc 與〈Diagnostic output〉 |
+| `src/genTestData.mjs` | `w-serv-orm/src/genTestData.mjs` | `default` | 離線產製測試資料(如各 w-web-* 根目錄之 `g_initialTestData.mjs`)：`genTestData(ds, woItems, opt)` 預設逐表呼叫 `ds[表].funTestAndSave(woItems)`；`opt.mode` 為 `'funTest'` 時改呼叫 `ds[表].funTest(woItems)` 取資料列(可經同步之 `opt.hookFunTestData(rows)` 轉換)，再交 `woItems[表].save(rows)` | 逐表依 `ds` 之鍵序，任一表失敗即停止；`funTest` 模式 `save` 回報失敗(逐筆或聚合 `ok` 為 0)即拋 `Error`，訊息起首為 `failed to write test data into table[表名]: `；`mode` 非兩種值者同預設；`opt.bLog`、`opt.logDetail`、`opt.funLog` 見〈Diagnostic output〉 |
+
+### 內部檔(不公開，不得深層匯入)
+
+| 檔 | 不公開之理由 |
+|---|---|
+| `src/getMapOrm.mjs` | `procOrm` 之核心實作，簽名含內部參數(`diag`)且近期多次改動(2026-10-29 診斷輸出遷移曾使直接呼叫者之行為改變)；下游僅測試為組真實 `procOrm` 而匯入，改用 `WServOrm(ds, 替身WOrm, url, db)` 之 `procOrm` 即可(結果等價，見〈測試組真實 procOrm〉) |
+| `src/getProc.mjs` | 擴充函數與 `procOrm` 之組裝，理由同 `getMapOrm.mjs`；下游以其建構期拋錯探測已移除之設定者，改用 `checkOptRemoved` 或 `WServOrm` 建構 |
+| `src/getWoItems.mjs` | `WServOrm` 建立各資料表 ORM 實例之內部步驟，下游無匯入 |
+| `src/getSettings.mjs` | 讀取設定檔之內部工具(診斷輸出行為見〈Diagnostic output〉)，下游無匯入 |
+| `src/getDbBackupAndRecover.mjs` | 低階備份還原，為 `WServOrm` 實例上之 `backup`、`recover` 與 `getDb` 之內部實作，下游經此二者使用 |
+| `src/getDiagBrief.mjs` | 診斷輸出之本套件設定與摘要函數(`genDiag`、`getBrief*`)，下游改用 wsemi 公開 API 與 `SAFE_KEYS` |
+| `src/isOrmFail.mjs` | 判定 ORM 寫入回傳是否失敗之內部共用謂詞(見〈Rows〉) |
+
+### 測試組真實 procOrm
+下游測試要在不碰資料庫下取得真實 `procOrm`(含 `withTabLocks`、`guardWrite`)，傳替身 `WOrm` 給 `WServOrm` 即可，不必匯入 `getMapOrm.mjs`、`getProc.mjs`；探測「已移除之設定」用 `checkOptRemoved`(或觀察 `WServOrm` 建構之拋錯)，兩者之訊息與內部檢查逐值相同。
+
+```js
+import WServOrm from 'w-serv-orm/src/WServOrm.mjs'
+import checkOptRemoved from 'w-serv-orm/src/checkOptRemoved.mjs'
+
+// 替身 WOrm：建構函數，收 { url, db, cl }，回傳該表之替身(提供 select、insert、save、del、delAll 等)
+function StubWOrm({ cl }) {
+    return stubTables[cl]
+}
+let { procOrm, withTabLocks, guardWrite } = WServOrm(ds, StubWOrm, 'stub', 'stub', { funLog: () => {} })
+
+checkOptRemoved({ useCheckUser: true }) // 拋 Error: opt.useCheckUser has been removed, ...
+```
+
 ## Conditions (find) and delAll
 `procOrm` 之 `select`、`delAll` 之條件(find)僅支援 w-orm 系列白名單，由各 `w-orm-*` 後端依相同規則檢核(須為已實作該白名單之 `w-orm-*` 版本；舊版或尚未更新者仍可能接受白名單外之運算子，不在下述保證內)，本套件不依運算子放行或攔截(僅把字串型主鍵條件中的有限數字轉為字串，見 JSDoc)：
 * 欄位等值 `{ 欄: 純量 }`(多欄為 AND)；欄位運算子 `$eq $ne $gt $gte $lt $lte`(值為純量)與 `$in $nin`(值為純量陣列)；文件層 `$and $or`(值為條件物件之非空陣列)。純量為字串(不含 NUL 字元與孤立代理字元)、有限數字、布林、有效 Date，`null` 僅可用於欄位等值、`$eq`、`$ne`。欄名、清單長度與巢狀深度等另有上限，完整規則見各 `w-orm-*` 之文件。
@@ -64,7 +110,7 @@ WServOrm(ds, WOrm, url, db, opt) // opt.logDetail、opt.funLog 皆選用
 
 ### 公開 `SAFE_KEYS`(本套件 funLog 所產生之安全摘要的鍵名單)
 
-下游伺服端(w-web-sso、w-web-api、w-web-task、w-web-perm 等)以 wsemi 之 `genDiagFunLog(write, { safeKeys })` 接管本套件之 `opt.funLog` 時，`safeKeys` 應傳本套件公開的 `SAFE_KEYS`：它是本套件 `safe`（上表）頂層鍵的**單一來源**（本套件自身的 `getDiag` 亦以它為白名單），使轉寫至伺服器日誌的 `safe` 只含本套件宣告之鍵（`errType`、`errCode` 由 wsemi 恆含，不列於名單）。**下游不得深層匯入本套件的內部檔**（如 `src/getDiagBrief.mjs`）。
+下游伺服端(w-web-sso、w-web-api、w-web-task、w-web-perm 等)以 wsemi 之 `genDiagFunLog(write, { safeKeys })` 接管本套件之 `opt.funLog` 時，`safeKeys` 應傳本套件公開的 `SAFE_KEYS`：它是本套件 `safe`（上表）頂層鍵的**單一來源**（本套件自身的 `getDiag` 亦以它為白名單），使轉寫至伺服器日誌的 `safe` 只含本套件宣告之鍵（`errType`、`errCode` 由 wsemi 恆含，不列於名單）。**下游不得深層匯入本套件的內部檔**（如 `src/getDiagBrief.mjs`；可深層匯入之檔見〈公開子模組〉）。
 
 ```js
 import genDiagFunLog from 'wsemi/src/genDiagFunLog.mjs'
@@ -86,6 +132,9 @@ let so = WServOrm(ds, WOrm, url, db, { funLog })
 
 ## Breaking changes
 
+* **2026-10-31(公開子模組清單)**：
+  * 新增公開子模組(純新增，既有行為不變)：`src/checkOptRemoved.mjs`、`src/getDb.mjs`、`src/genTestData.mjs`，連同既有之 `src/WServOrm.mjs`、`src/baseline.mjs`、`src/safeKeys.mjs`，用途、匯入路徑、匯出與穩定性承諾見〈公開子模組〉。
+  * 明定 `src/` 下其餘 `.mjs` 為內部檔，不再保證穩定、不列入 Breaking changes：`getMapOrm.mjs`、`getProc.mjs` 不公開，原直接匯入此二檔以組真實 `procOrm` 者(僅下游測試)，改用 `WServOrm(ds, 替身WOrm, url, db)` 之 `procOrm`(結果等價)，探測已移除之設定改用 `checkOptRemoved`；本套件之程式行為未變。
 * **2026-10-30(診斷輸出收斂為 wsemi 公開 API;wsemi ≥ 1.9.33)**：
   * **刪除 `src/getDiagBrief.mjs` 匯出之 `getUrlSecrets(url)`**：改為 wsemi 的 `getDiagSecrets({ conns: [url] })`（連線字串〔含 `://` 或 `@`〕列為網址，其餘〔檔案型資料庫之位置〕列為儲存路徑，與舊函數結果相同）。原深層匯入 `w-serv-orm/src/getDiagBrief.mjs` 取 `getUrlSecrets` 者（w-web-task 之 `server/genDiag.mjs`、w-web-perm 之 `server/maskRaw.mjs`）須改用 `getDiagSecrets({ conns })`；`getDiagBrief.mjs` 為本套件內部檔，不再提供給下游。
   * **公開 `SAFE_KEYS`**：`import { SAFE_KEYS } from 'w-serv-orm/src/safeKeys.mjs'`（用途與用法見上節〈公開 `SAFE_KEYS`〉）。

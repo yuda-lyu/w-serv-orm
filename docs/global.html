@@ -29,7 +29,7 @@
 <nav >
     
     
-    <h2><a href="index.html">Home</a></h2><h3>Classes</h3><ul><li><a href="WServOrm.html">WServOrm</a></li></ul><h3>Global</h3><ul><li><a href="global.html#SAFE_KEYS">SAFE_KEYS</a></li><li><a href="global.html#buildBaseline">buildBaseline</a></li><li><a href="global.html#checkContract">checkContract</a></li><li><a href="global.html#compareBaseline">compareBaseline</a></li><li><a href="global.html#cyrb53">cyrb53</a></li><li><a href="global.html#digestRow">digestRow</a></li><li><a href="global.html#getRejectKey">getRejectKey</a></li><li><a href="global.html#isBaselineValid">isBaselineValid</a></li><li><a href="global.html#isOrmFail">isOrmFail</a></li><li><a href="global.html#pickWriteRow">pickWriteRow</a></li></ul>
+    <h2><a href="index.html">Home</a></h2><h3>Classes</h3><ul><li><a href="WServOrm.html">WServOrm</a></li></ul><h3>Global</h3><ul><li><a href="global.html#SAFE_KEYS">SAFE_KEYS</a></li><li><a href="global.html#backup">backup</a></li><li><a href="global.html#buildBaseline">buildBaseline</a></li><li><a href="global.html#checkContract">checkContract</a></li><li><a href="global.html#checkOptRemoved">checkOptRemoved</a></li><li><a href="global.html#compareBaseline">compareBaseline</a></li><li><a href="global.html#cyrb53">cyrb53</a></li><li><a href="global.html#digestRow">digestRow</a></li><li><a href="global.html#genTestData">genTestData</a></li><li><a href="global.html#getRejectKey">getRejectKey</a></li><li><a href="global.html#isBaselineValid">isBaselineValid</a></li><li><a href="global.html#isOrmFail">isOrmFail</a></li><li><a href="global.html#pickWriteRow">pickWriteRow</a></li><li><a href="global.html#recover">recover</a></li></ul>
     
 </nav>
 
@@ -221,6 +221,375 @@ let so = WServOrm(ds, WOrm, url, db, { funLog })</code></pre>
 
     
         <h3 class="subsection-title">Methods</h3>
+
+        
+            
+
+    
+
+    <h4 class="name" id="backup"><span class="type-signature type-signature-async">(async) </span>backup<span class="signature">(woItems, opt<span class="signature-attributes">opt</span>)</span><span class="type-signature"> &rarr; {Promise.&lt;undefined>}</span></h4>
+
+    
+
+
+
+
+<dl class="details">
+    
+    <dt class="tag-description">Description:</dt>
+    <dd class="tag-description"><ul class="dummy"><li><p>備份各資料表至檔案(公開子模組，見README〈公開子模組〉)</p>
+<p>各表以select取全部數據，寫入「模組載入時之工作目錄」(載入後改變cwd不影響)下之backup-時間.json，內容為[{ name, data }, ...]；成功resolve undefined，失敗印診斷輸出後reject(外來錯誤之連線憑證已遮罩)，令呼叫端(含未await之頂層腳本)可偵測。
+診斷輸出依opt.bLog、opt.logDetail、opt.funLog(型別錯誤者忽略並用預設)，見README〈Diagnostic output〉。</p></li></ul></dd>
+    
+
+    
+    <dt class="tag-source">Source:</dt>
+    <dd class="tag-source"><ul class="dummy"><li>
+        <a href="getDb.mjs.html">getDb.mjs</a>, <a href="getDb.mjs.html#line96">line 96</a>
+    </li></ul></dd>
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+</dl>
+
+
+
+
+
+
+
+
+
+
+
+    <h5 class="h5-examples">Example</h5>
+    
+    <pre class="prettyprint"><code>import getDb from 'w-serv-orm/src/getDb.mjs'await getDb.backup(woItems) //寫出./backup-時間.json</code></pre>
+
+
+
+
+    <h5 class="h5-parameters">Parameters:</h5>
+    
+
+<table class="params">
+    <thead>
+    <tr>
+        
+        <th>Name</th>
+        
+
+        <th>Type</th>
+
+        
+        <th>Attributes</th>
+        
+
+        
+        <th>Default</th>
+        
+
+        <th class="last">Description</th>
+    </tr>
+    </thead>
+
+    <tbody>
+    
+
+        <tr>
+            
+                <td class="name"><code>woItems</code></td>
+            
+
+            <td class="type">
+            
+                
+<span class="param-type">Object</span>
+
+
+
+            
+            </td>
+
+            
+                <td class="attributes">
+                
+
+                
+
+                
+                </td>
+            
+
+            
+                <td class="default">
+                
+                </td>
+            
+
+            <td class="description last"><p>輸入各資料表ORM實例物件(如WServOrm回傳物件之woItems)</p></td>
+        </tr>
+
+    
+
+        <tr>
+            
+                <td class="name"><code>opt</code></td>
+            
+
+            <td class="type">
+            
+                
+<span class="param-type">Object</span>
+
+
+
+            
+            </td>
+
+            
+                <td class="attributes">
+                
+                    &lt;optional><br>
+                
+
+                
+
+                
+                </td>
+            
+
+            
+                <td class="default">
+                
+                    <code>{}</code>
+                
+                </td>
+            
+
+            <td class="description last"><p>輸入設定物件，預設{}</p>
+                <h6>Properties</h6>
+                
+
+<table class="params">
+    <thead>
+    <tr>
+        
+        <th>Name</th>
+        
+
+        <th>Type</th>
+
+        
+        <th>Attributes</th>
+        
+
+        
+        <th>Default</th>
+        
+
+        <th class="last">Description</th>
+    </tr>
+    </thead>
+
+    <tbody>
+    
+
+        <tr>
+            
+                <td class="name"><code>bLog</code></td>
+            
+
+            <td class="type">
+            
+                
+<span class="param-type">Boolean</span>
+
+
+
+            
+            </td>
+
+            
+                <td class="attributes">
+                
+                    &lt;optional><br>
+                
+
+                
+
+                
+                </td>
+            
+
+            
+                <td class="default">
+                
+                    <code>true</code>
+                
+                </td>
+            
+
+            <td class="description last"><p>輸入是否輸出進度與完成訊息，預設true</p></td>
+        </tr>
+
+    
+
+        <tr>
+            
+                <td class="name"><code>logDetail</code></td>
+            
+
+            <td class="type">
+            
+                
+<span class="param-type">Boolean</span>
+
+
+
+            
+            </td>
+
+            
+                <td class="attributes">
+                
+                    &lt;optional><br>
+                
+
+                
+
+                
+                </td>
+            
+
+            
+                <td class="default">
+                
+                    <code>false</code>
+                
+                </td>
+            
+
+            <td class="description last"><p>輸入失敗時是否輸出含細節(連線憑證已遮罩)之診斷，預設false</p></td>
+        </tr>
+
+    
+
+        <tr>
+            
+                <td class="name"><code>funLog</code></td>
+            
+
+            <td class="type">
+            
+                
+<span class="param-type">function</span>
+
+
+
+            
+            </td>
+
+            
+                <td class="attributes">
+                
+                    &lt;optional><br>
+                
+
+                
+
+                
+                </td>
+            
+
+            
+                <td class="default">
+                
+                </td>
+            
+
+            <td class="description last"><p>輸入使用端提供之紀錄函式(label, safe, detail)，給予時診斷輸出只交給它</p></td>
+        </tr>
+
+    
+    </tbody>
+</table>
+
+            </td>
+        </tr>
+
+    
+    </tbody>
+</table>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<h5 class="h5-returns">Returns:</h5>
+
+        
+<div class="param-desc">
+    <p>回傳Promise，成功resolve undefined，失敗reject</p>
+</div>
+
+
+
+<dl class="param-type">
+    <dt>
+        Type
+    </dt>
+    <dd>
+        
+<span class="param-type">Promise.&lt;undefined></span>
+
+
+
+    </dd>
+</dl>
+
+    
+
+
 
         
             
@@ -558,6 +927,217 @@ serverOnly 若給予須為不重複之非空字串陣列且與 fields 無交集�
     <dd>
         
 <span class="param-type">Boolean</span>
+
+
+
+    </dd>
+</dl>
+
+    
+
+
+
+        
+            
+
+    
+
+    <h4 class="name" id="checkOptRemoved"><span class="type-signature"></span>checkOptRemoved<span class="signature">(opt<span class="signature-attributes">opt</span>)</span><span class="type-signature"> &rarr; {undefined}</span></h4>
+
+    
+
+
+
+
+<dl class="details">
+    
+    <dt class="tag-description">Description:</dt>
+    <dd class="tag-description"><ul class="dummy"><li><p>檢查opt是否帶有本套件已移除之設定(公開子模組，見README〈公開子模組〉)</p>
+<p>供使用端包裝層(如w-web-*)於建構自身之前，預先檢查自身之opt；判準與訊息之單一擁有者為本套件，WServOrm之建構與getProc亦呼叫本函數。
+同步；只看useCheckUser、getUserById、useExcludeWhenNotAdmin三鍵，值為undefined、null、false者通過並回傳undefined，其他值拋Error，訊息起首為<code>opt.&lt;鍵&gt; has been removed, </code>(其後之提示句不屬穩定承諾)；多鍵違規時依上述三鍵之序報第一個；opt未給、為null或非物件者通過；不改動opt，opt之其他鍵不受影響。
+受檢鍵之增減列入README〈Breaking changes〉。</p></li></ul></dd>
+    
+
+    
+    <dt class="tag-source">Source:</dt>
+    <dd class="tag-source"><ul class="dummy"><li>
+        <a href="checkOptRemoved.mjs.html">checkOptRemoved.mjs</a>, <a href="checkOptRemoved.mjs.html#line22">line 22</a>
+    </li></ul></dd>
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+</dl>
+
+
+
+
+
+
+
+
+
+
+
+    <h5 class="h5-examples">Example</h5>
+    
+    <pre class="prettyprint"><code>import checkOptRemoved from 'w-serv-orm/src/checkOptRemoved.mjs'
+
+checkOptRemoved({ useCheckUser: false, serverPort: 11005 }) //通過
+checkOptRemoved({ useCheckUser: true }) //拋Error: opt.useCheckUser has been removed, ...</code></pre>
+
+
+
+
+    <h5 class="h5-parameters">Parameters:</h5>
+    
+
+<table class="params">
+    <thead>
+    <tr>
+        
+        <th>Name</th>
+        
+
+        <th>Type</th>
+
+        
+        <th>Attributes</th>
+        
+
+        
+
+        <th class="last">Description</th>
+    </tr>
+    </thead>
+
+    <tbody>
+    
+
+        <tr>
+            
+                <td class="name"><code>opt</code></td>
+            
+
+            <td class="type">
+            
+                
+<span class="param-type">Object</span>
+
+
+
+            
+            </td>
+
+            
+                <td class="attributes">
+                
+                    &lt;optional><br>
+                
+
+                
+
+                
+                </td>
+            
+
+            
+
+            <td class="description last"><p>輸入設定物件</p></td>
+        </tr>
+
+    
+    </tbody>
+</table>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<h5 class="h5-throws">Throws:</h5>
+
+        
+
+<dl>
+    <dt>
+        <div class="param-desc usertext">
+        <p>三鍵之一給予undefined、null、false以外之值時</p>
+        </div>
+    </dt>
+    <dd></dd>
+    <dt>
+        <dl class="param-type">
+            <dt>
+                Type
+            </dt>
+            <dd>
+                
+<span class="param-type">Error</span>
+
+
+
+            </dd>
+        </dl>
+    </dt>
+    <dd></dd>
+</dl>
+
+
+    
+
+
+<h5 class="h5-returns">Returns:</h5>
+
+        
+<div class="param-desc">
+    <p>通過時回傳undefined</p>
+</div>
+
+
+
+<dl class="param-type">
+    <dt>
+        Type
+    </dt>
+    <dd>
+        
+<span class="param-type">undefined</span>
 
 
 
@@ -1170,6 +1750,489 @@ rowsNow 內之主鍵缺漏或重複拋 key 為 'rowsInvalid' 之Error(庫內資�
     <dd>
         
 <span class="param-type">String</span>
+
+
+
+    </dd>
+</dl>
+
+    
+
+
+
+        
+            
+
+    
+
+    <h4 class="name" id="genTestData"><span class="type-signature type-signature-async">(async) </span>genTestData<span class="signature">(ds, woItems, opt<span class="signature-attributes">opt</span>)</span><span class="type-signature"> &rarr; {Promise.&lt;undefined>}</span></h4>
+
+    
+
+
+
+
+<dl class="details">
+    
+    <dt class="tag-description">Description:</dt>
+    <dd class="tag-description"><ul class="dummy"><li><p>離線產製測試資料(公開子模組，見README〈公開子模組〉)</p>
+<p>逐表(依ds之鍵序，一次一表)處理，任一表失敗即停止、之後之表不執行。預設mode為'funTestAndSave'：呼叫ds[表].funTestAndSave(woItems)；mode為'funTest'：呼叫ds[表].funTest(woItems)取資料列，經opt.hookFunTestData(rows)(同步，選用)轉換後交woItems[表].save(rows)，save回報失敗(逐筆或聚合ok為0)即拋Error，訊息起首為<code>failed to write test data into table[表名]: </code>；mode非此二值者同預設。
+使用端函數(funTestAndSave、funTest、hookFunTestData)與ORM拋出或reject之值為外來值，含連線憑證者轉出遮罩後之副本，見README〈對外錯誤值〉；診斷輸出依opt.bLog、opt.logDetail、opt.funLog(型別錯誤者忽略並用預設)，見README〈Diagnostic output〉。</p></li></ul></dd>
+    
+
+    
+    <dt class="tag-source">Source:</dt>
+    <dd class="tag-source"><ul class="dummy"><li>
+        <a href="genTestData.mjs.html">genTestData.mjs</a>, <a href="genTestData.mjs.html#line34">line 34</a>
+    </li></ul></dd>
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+</dl>
+
+
+
+
+
+
+
+
+
+
+
+    <h5 class="h5-examples">Example</h5>
+    
+    <pre class="prettyprint"><code>import genTestData from 'w-serv-orm/src/genTestData.mjs'await genTestData(ds, woItems)await genTestData(ds, woItems, { mode: 'funTest', hookFunTestData: (rows) => rows })</code></pre>
+
+
+
+
+    <h5 class="h5-parameters">Parameters:</h5>
+    
+
+<table class="params">
+    <thead>
+    <tr>
+        
+        <th>Name</th>
+        
+
+        <th>Type</th>
+
+        
+        <th>Attributes</th>
+        
+
+        
+        <th>Default</th>
+        
+
+        <th class="last">Description</th>
+    </tr>
+    </thead>
+
+    <tbody>
+    
+
+        <tr>
+            
+                <td class="name"><code>ds</code></td>
+            
+
+            <td class="type">
+            
+                
+<span class="param-type">Object</span>
+
+
+
+            
+            </td>
+
+            
+                <td class="attributes">
+                
+
+                
+
+                
+                </td>
+            
+
+            
+                <td class="default">
+                
+                </td>
+            
+
+            <td class="description last"><p>輸入資料表設定物件，各表含funTestAndSave或funTest函數</p></td>
+        </tr>
+
+    
+
+        <tr>
+            
+                <td class="name"><code>woItems</code></td>
+            
+
+            <td class="type">
+            
+                
+<span class="param-type">Object</span>
+
+
+
+            
+            </td>
+
+            
+                <td class="attributes">
+                
+
+                
+
+                
+                </td>
+            
+
+            
+                <td class="default">
+                
+                </td>
+            
+
+            <td class="description last"><p>輸入各資料表ORM實例物件(如WServOrm回傳物件之woItems)</p></td>
+        </tr>
+
+    
+
+        <tr>
+            
+                <td class="name"><code>opt</code></td>
+            
+
+            <td class="type">
+            
+                
+<span class="param-type">Object</span>
+
+
+
+            
+            </td>
+
+            
+                <td class="attributes">
+                
+                    &lt;optional><br>
+                
+
+                
+
+                
+                </td>
+            
+
+            
+                <td class="default">
+                
+                    <code>{}</code>
+                
+                </td>
+            
+
+            <td class="description last"><p>輸入設定物件，預設{}</p>
+                <h6>Properties</h6>
+                
+
+<table class="params">
+    <thead>
+    <tr>
+        
+        <th>Name</th>
+        
+
+        <th>Type</th>
+
+        
+        <th>Attributes</th>
+        
+
+        
+        <th>Default</th>
+        
+
+        <th class="last">Description</th>
+    </tr>
+    </thead>
+
+    <tbody>
+    
+
+        <tr>
+            
+                <td class="name"><code>mode</code></td>
+            
+
+            <td class="type">
+            
+                
+<span class="param-type">String</span>
+
+
+
+            
+            </td>
+
+            
+                <td class="attributes">
+                
+                    &lt;optional><br>
+                
+
+                
+
+                
+                </td>
+            
+
+            
+                <td class="default">
+                
+                    <code>'funTestAndSave'</code>
+                
+                </td>
+            
+
+            <td class="description last"><p>輸入模式字串，可為'funTestAndSave'或'funTest'，預設'funTestAndSave'</p></td>
+        </tr>
+
+    
+
+        <tr>
+            
+                <td class="name"><code>hookFunTestData</code></td>
+            
+
+            <td class="type">
+            
+                
+<span class="param-type">function</span>
+
+
+
+            
+            </td>
+
+            
+                <td class="attributes">
+                
+                    &lt;optional><br>
+                
+
+                
+
+                
+                </td>
+            
+
+            
+                <td class="default">
+                
+                </td>
+            
+
+            <td class="description last"><p>輸入mode為'funTest'時轉換資料列之同步函數(rows)，預設無</p></td>
+        </tr>
+
+    
+
+        <tr>
+            
+                <td class="name"><code>bLog</code></td>
+            
+
+            <td class="type">
+            
+                
+<span class="param-type">Boolean</span>
+
+
+
+            
+            </td>
+
+            
+                <td class="attributes">
+                
+                    &lt;optional><br>
+                
+
+                
+
+                
+                </td>
+            
+
+            
+                <td class="default">
+                
+                    <code>true</code>
+                
+                </td>
+            
+
+            <td class="description last"><p>輸入是否輸出進度訊息，預設true</p></td>
+        </tr>
+
+    
+
+        <tr>
+            
+                <td class="name"><code>logDetail</code></td>
+            
+
+            <td class="type">
+            
+                
+<span class="param-type">Boolean</span>
+
+
+
+            
+            </td>
+
+            
+                <td class="attributes">
+                
+                    &lt;optional><br>
+                
+
+                
+
+                
+                </td>
+            
+
+            
+                <td class="default">
+                
+                    <code>false</code>
+                
+                </td>
+            
+
+            <td class="description last"><p>輸入是否輸出含細節(連線憑證已遮罩)之診斷，預設false</p></td>
+        </tr>
+
+    
+
+        <tr>
+            
+                <td class="name"><code>funLog</code></td>
+            
+
+            <td class="type">
+            
+                
+<span class="param-type">function</span>
+
+
+
+            
+            </td>
+
+            
+                <td class="attributes">
+                
+                    &lt;optional><br>
+                
+
+                
+
+                
+                </td>
+            
+
+            
+                <td class="default">
+                
+                </td>
+            
+
+            <td class="description last"><p>輸入使用端提供之紀錄函式(label, safe, detail)，給予時診斷輸出只交給它</p></td>
+        </tr>
+
+    
+    </tbody>
+</table>
+
+            </td>
+        </tr>
+
+    
+    </tbody>
+</table>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<h5 class="h5-returns">Returns:</h5>
+
+        
+<div class="param-desc">
+    <p>回傳Promise，成功resolve undefined，失敗reject</p>
+</div>
+
+
+
+<dl class="param-type">
+    <dt>
+        Type
+    </dt>
+    <dd>
+        
+<span class="param-type">Promise.&lt;undefined></span>
 
 
 
@@ -1851,6 +2914,567 @@ rowsNow 內之主鍵缺漏或重複拋 key 為 'rowsInvalid' 之Error(庫內資�
 
 
         
+            
+
+    
+
+    <h4 class="name" id="recover"><span class="type-signature type-signature-async">(async) </span>recover<span class="signature">(woItems, fp, opt<span class="signature-attributes">opt</span>)</span><span class="type-signature"> &rarr; {Promise.&lt;undefined>}</span></h4>
+
+    
+
+
+
+
+<dl class="details">
+    
+    <dt class="tag-description">Description:</dt>
+    <dd class="tag-description"><ul class="dummy"><li><p>由備份檔以insert還原各資料表(公開子模組，見README〈公開子模組〉)</p>
+<p>參數順序(woItems, fp, opt)與WServOrm實例上之recover(fp, woItems, genModels, needCreateStorage)不同。逐表寫入，主鍵已存在者略過，故資料表須先清空；備份檔不存在或內容無效(須為非空陣列且各筆之name為woItems內之資料表)於任何寫入之前reject；中途失敗(含insert回報ok為0，見README〈Rows〉)於該表停止，先前之表已寫入、之後之表不寫入。
+關聯資料庫(opt.bRela為true)須提供opt.ds與opt.genModelsByTabs以產生model，缺則於任何寫入之前reject。診斷輸出依opt.bLog、opt.logDetail、opt.funLog(型別錯誤者忽略並用預設)，見README〈Diagnostic output〉。</p></li></ul></dd>
+    
+
+    
+    <dt class="tag-source">Source:</dt>
+    <dd class="tag-source"><ul class="dummy"><li>
+        <a href="getDb.mjs.html">getDb.mjs</a>, <a href="getDb.mjs.html#line170">line 170</a>
+    </li></ul></dd>
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+</dl>
+
+
+
+
+
+
+
+
+
+
+
+    <h5 class="h5-examples">Example</h5>
+    
+    <pre class="prettyprint"><code>import getDb from 'w-serv-orm/src/getDb.mjs'await getDb.recover(woItems, './backup-20260101T000000.json')</code></pre>
+
+
+
+
+    <h5 class="h5-parameters">Parameters:</h5>
+    
+
+<table class="params">
+    <thead>
+    <tr>
+        
+        <th>Name</th>
+        
+
+        <th>Type</th>
+
+        
+        <th>Attributes</th>
+        
+
+        
+        <th>Default</th>
+        
+
+        <th class="last">Description</th>
+    </tr>
+    </thead>
+
+    <tbody>
+    
+
+        <tr>
+            
+                <td class="name"><code>woItems</code></td>
+            
+
+            <td class="type">
+            
+                
+<span class="param-type">Object</span>
+
+
+
+            
+            </td>
+
+            
+                <td class="attributes">
+                
+
+                
+
+                
+                </td>
+            
+
+            
+                <td class="default">
+                
+                </td>
+            
+
+            <td class="description last"><p>輸入各資料表ORM實例物件(如WServOrm回傳物件之woItems)</p></td>
+        </tr>
+
+    
+
+        <tr>
+            
+                <td class="name"><code>fp</code></td>
+            
+
+            <td class="type">
+            
+                
+<span class="param-type">String</span>
+
+
+
+            
+            </td>
+
+            
+                <td class="attributes">
+                
+
+                
+
+                
+                </td>
+            
+
+            
+                <td class="default">
+                
+                </td>
+            
+
+            <td class="description last"><p>輸入備份檔路徑字串</p></td>
+        </tr>
+
+    
+
+        <tr>
+            
+                <td class="name"><code>opt</code></td>
+            
+
+            <td class="type">
+            
+                
+<span class="param-type">Object</span>
+
+
+
+            
+            </td>
+
+            
+                <td class="attributes">
+                
+                    &lt;optional><br>
+                
+
+                
+
+                
+                </td>
+            
+
+            
+                <td class="default">
+                
+                    <code>{}</code>
+                
+                </td>
+            
+
+            <td class="description last"><p>輸入設定物件，預設{}</p>
+                <h6>Properties</h6>
+                
+
+<table class="params">
+    <thead>
+    <tr>
+        
+        <th>Name</th>
+        
+
+        <th>Type</th>
+
+        
+        <th>Attributes</th>
+        
+
+        
+        <th>Default</th>
+        
+
+        <th class="last">Description</th>
+    </tr>
+    </thead>
+
+    <tbody>
+    
+
+        <tr>
+            
+                <td class="name"><code>bRela</code></td>
+            
+
+            <td class="type">
+            
+                
+<span class="param-type">Boolean</span>
+
+
+
+            
+            </td>
+
+            
+                <td class="attributes">
+                
+                    &lt;optional><br>
+                
+
+                
+
+                
+                </td>
+            
+
+            
+                <td class="default">
+                
+                    <code>false</code>
+                
+                </td>
+            
+
+            <td class="description last"><p>輸入是否為關聯資料庫，預設false</p></td>
+        </tr>
+
+    
+
+        <tr>
+            
+                <td class="name"><code>ds</code></td>
+            
+
+            <td class="type">
+            
+                
+<span class="param-type">Object</span>
+
+
+
+            
+            </td>
+
+            
+                <td class="attributes">
+                
+                    &lt;optional><br>
+                
+
+                
+
+                
+                </td>
+            
+
+            
+                <td class="default">
+                
+                </td>
+            
+
+            <td class="description last"><p>輸入資料表設定物件，bRela為true時必給</p></td>
+        </tr>
+
+    
+
+        <tr>
+            
+                <td class="name"><code>genModelsByTabs</code></td>
+            
+
+            <td class="type">
+            
+                
+<span class="param-type">function</span>
+
+
+
+            
+            </td>
+
+            
+                <td class="attributes">
+                
+                    &lt;optional><br>
+                
+
+                
+
+                
+                </td>
+            
+
+            
+                <td class="default">
+                
+                </td>
+            
+
+            <td class="description last"><p>輸入依資料表設定產生model之函數(fd, tabs)，bRela為true時必給</p></td>
+        </tr>
+
+    
+
+        <tr>
+            
+                <td class="name"><code>fdModels</code></td>
+            
+
+            <td class="type">
+            
+                
+<span class="param-type">String</span>
+
+
+
+            
+            </td>
+
+            
+                <td class="attributes">
+                
+                    &lt;optional><br>
+                
+
+                
+
+                
+                </td>
+            
+
+            
+                <td class="default">
+                
+                    <code>'./models'</code>
+                
+                </td>
+            
+
+            <td class="description last"><p>輸入model輸出資料夾，預設'./models'</p></td>
+        </tr>
+
+    
+
+        <tr>
+            
+                <td class="name"><code>bLog</code></td>
+            
+
+            <td class="type">
+            
+                
+<span class="param-type">Boolean</span>
+
+
+
+            
+            </td>
+
+            
+                <td class="attributes">
+                
+                    &lt;optional><br>
+                
+
+                
+
+                
+                </td>
+            
+
+            
+                <td class="default">
+                
+                    <code>true</code>
+                
+                </td>
+            
+
+            <td class="description last"><p>輸入是否輸出進度與完成訊息，預設true</p></td>
+        </tr>
+
+    
+
+        <tr>
+            
+                <td class="name"><code>logDetail</code></td>
+            
+
+            <td class="type">
+            
+                
+<span class="param-type">Boolean</span>
+
+
+
+            
+            </td>
+
+            
+                <td class="attributes">
+                
+                    &lt;optional><br>
+                
+
+                
+
+                
+                </td>
+            
+
+            
+                <td class="default">
+                
+                    <code>false</code>
+                
+                </td>
+            
+
+            <td class="description last"><p>輸入失敗時是否輸出含細節(連線憑證已遮罩)之診斷，預設false</p></td>
+        </tr>
+
+    
+
+        <tr>
+            
+                <td class="name"><code>funLog</code></td>
+            
+
+            <td class="type">
+            
+                
+<span class="param-type">function</span>
+
+
+
+            
+            </td>
+
+            
+                <td class="attributes">
+                
+                    &lt;optional><br>
+                
+
+                
+
+                
+                </td>
+            
+
+            
+                <td class="default">
+                
+                </td>
+            
+
+            <td class="description last"><p>輸入使用端提供之紀錄函式(label, safe, detail)，給予時診斷輸出只交給它</p></td>
+        </tr>
+
+    
+    </tbody>
+</table>
+
+            </td>
+        </tr>
+
+    
+    </tbody>
+</table>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<h5 class="h5-returns">Returns:</h5>
+
+        
+<div class="param-desc">
+    <p>回傳Promise，成功resolve undefined，失敗reject</p>
+</div>
+
+
+
+<dl class="param-type">
+    <dt>
+        Type
+    </dt>
+    <dd>
+        
+<span class="param-type">Promise.&lt;undefined></span>
+
+
+
+    </dd>
+</dl>
+
+    
+
+
+
+        
     
 
     
@@ -1870,7 +3494,7 @@ rowsNow 內之主鍵缺漏或重複拋 key 為 'rowsInvalid' 之Error(庫內資�
 <br class="clear">
 
 <footer>
-    Documentation generated by <a href="https://github.com/jsdoc3/jsdoc">JSDoc 4.0.5</a> on Fri Oct 30 2026 19:15:25 GMT+0800 (台北標準時間) using the <a href="https://github.com/clenemt/docdash">docdash</a> theme.
+    Documentation generated by <a href="https://github.com/jsdoc3/jsdoc">JSDoc 4.0.5</a> on Sat Oct 31 2026 12:48:12 GMT+0800 (台北標準時間) using the <a href="https://github.com/clenemt/docdash">docdash</a> theme.
 </footer>
 
 <script>prettyPrint();</script>
