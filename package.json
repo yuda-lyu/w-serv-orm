@@ -1,15 +1,15 @@
 {
   "name": "w-serv-orm",
-  "version": "1.1.34",
+  "version": "1.1.35",
   "main": "dist/w-serv-orm.umd.js",
   "dependencies": {
     "json5": "^2.2.3",
-    "w-data-collector": "^1.0.59",
-    "wsemi": "^1.9.55"
+    "w-data-collector": "^1.0.60",
+    "wsemi": "^1.9.56"
   },
   "devDependencies": {
-    "w-orm-lowdb": "^1.0.52",
-    "w-package-tools": "^1.1.25"
+    "w-orm-lowdb": "^1.0.54",
+    "w-package-tools": "^1.1.26"
   },
   "scripts": {
     "test": "mocha --parallel \"test/*.test.mjs\" --timeout 180000",
