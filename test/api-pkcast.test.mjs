@@ -1,7 +1,6 @@
 import fs from 'fs'
 import assert from 'assert'
 import WOrm from 'w-orm-lowdb/src/WOrmLowdb.mjs'
-import ltdtDiffByKey from 'wsemi/src/ltdtDiffByKey.mjs'
 import ds from '../schema/index.mjs'
 import WServOrm from '../src/WServOrm.mjs'
 
@@ -76,11 +75,12 @@ describe('數字主鍵接w-orm-lowdb', function() {
         assert.deepStrictEqual(await rows(), [['777', 'B']])
     })
 
-    it('A10 以ltdtDiffByKey嚴格比對產生之add 888、del 888字串, 整批reject且表內不變', async function() {
+    it('A10 同批之add 888(數字)與del 888(字串), 整批reject且表內不變', async function() {
         //R-MIX-01 規則1、2: 原為insert略過、del刪除而resolve遺失資料
+        //輸入原以 wsemi ltdtDiffByKey 嚴格比對產生; wsemi 1.9.60 起該函數遇主鍵轉字串相同而型別不同即拋錯(第 430 項), 故直接寫出同形之輸入, 本防護仍適用於呼叫端自組之輸入
         await so.woItems.tests.insert([{ id: '888', isActive: 'y' }])
         let old = await so.woItems.tests.select()
-        let input = ltdtDiffByKey(old, [{ ...old[0], id: 888 }], 'id', { withInfor: false })
+        let input = { del: [old[0]], add: [{ ...old[0], id: 888 }], same: [], diff: [] }
         assert.deepStrictEqual([input.add.length, input.del.length], [1, 1])
         let err = await quiet(() => getReject(proc('mix', input)))
         assert.strictEqual(err, 'invalid input of mix, same id in add and del: add[0], del[0]')
