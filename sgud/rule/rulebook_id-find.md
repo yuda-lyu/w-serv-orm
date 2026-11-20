@@ -4,15 +4,26 @@
 
 ## R-ID-01 未帶主鍵者由本套件補值並回傳
 
-- 狀態: 已套(1.1.8;1.1.10 之後依 R-ID-02 修訂有效主鍵之判定與空物件列).
-- 單一擁有者: `src/getMapOrm.mjs` adjustData(補值段)、isPkIdString.
+- 狀態: 已套(1.1.8;1.1.10 之後依 R-ID-02 修訂有效主鍵之判定與空物件列;2026-11-20 第 568 項: 規則 1 收窄「未帶」之定義、新增規則 5「給了而無效即拒絕」,未提交、未發布).
+- 單一擁有者: `src/getMapOrm.mjs` adjustData(補值段)、isPkIdString;**給了而無效之判定與拒絕: getItemsBadId**(規則 5).
 - 規則:
-  1. insert、save、mix 之 add 與 diff,數據未帶有效主鍵者補值.有效主鍵為非空字串;字串型主鍵欄之有限數字先依 R-ID-02 轉為字串,故剩餘之數字(NaN、±Infinity)與其他型別(null、''、布林、物件、陣列、Date、BigInt)皆視為未提供而補值.條件(即 isPkIdString): 主鍵欄為 id;有 settings 者須標為 pk;型別為 STRING、TEXT、CHAR、UUID、CITEXT 或未知(比對前取 `(` 之前之字並轉大寫,`STRING(36)` 視為 STRING).補值器為 wsemi 之 genIDSeq,與各 w-orm 後端相同.(2026-11-20 第 557 項: 「相同」限補值器; w-orm-lowdb ≥ 1.0.72 對「給了而非字串」之主鍵〔布林、物件、陣列、NaN 等〕已改為拒絕而非換成新主鍵,本層對此類值仍視為未提供而補值——本輪未改,屬待裁示,見 state 之已知缺口.)
+  1. insert、save、mix 之 add 與 diff,數據**未帶**主鍵者補值.**未帶只有四種**: 主鍵 `id` 為 `undefined`、`null`、`''`,或列上無自有可列舉之 `id` 資料屬性(無此鍵,或為繼承、不可列舉者,R-OBJ-01 規則 7 ①).有效主鍵為非空字串;字串型主鍵欄之有限數字先依 R-ID-02 轉為字串.**其餘一律為「給了而無效」,不補值而整批拒絕(規則 5)**——含 NaN、±Infinity、布林、物件、陣列、Date、BigInt、Symbol、函數,及 `new String`、`new Number`、`new Boolean` 等包裝物件.條件(即 isPkIdString): 主鍵欄為 id;有 settings 者須標為 pk;型別為 STRING、TEXT、CHAR、UUID、CITEXT 或未知(比對前取 `(` 之前之字並轉大寫,`STRING(36)` 視為 STRING);**主鍵欄為整數型等(isPkIdString 為假)者本層不補值、不轉型、亦不檢查,原樣交後端依其主鍵欄型別契約處置**(全族規則一第 6 點,型別化後端之例外).補值器為 wsemi 之 genIDSeq,與各 w-orm 後端相同.(2026-11-20 第 557 項: 「相同」限補值器; w-orm-lowdb ≥ 1.0.72 對「給了而非字串」之主鍵已改為拒絕而非換成新主鍵,第 568 項起本層同向,見規則 5.)
   2. 補值寫於清除 XSS 後之複本,不改呼叫端之物件.
   3. 輸入依 wsemi 之 iseobj(單一物件)或 isearr(陣列)判為無效者不補,保留後端視之為無效輸入(規格 T5)而不寫入之行為: 即單一空物件 `{}` 與只含一個空物件之陣列 `[{}]`.其餘(含多筆批次中之空物件列)一律補值,令回傳之主鍵與後端實際寫入者一致.
   4. resolve 時回傳補出之主鍵;reject 時不回傳,故重送未帶主鍵之數據會重複寫入,需冪等者自帶主鍵.
-- 測試: `test/unit-WServOrm.test.mjs` P01-P06;`test/api-procOrm.test.mjs` A05;`test/unit-mapOrm.test.mjs` X05、X07;`test/unit-pkcast.test.mjs` N05、N08、E04.
+  5. **主鍵給了而無效者整批拒絕,不得靜默換成新產生之主鍵**(2026-11-20 第 568 項; 對齊 w-orm-* 全族第 557 項規則一,共同規則 `common-rules.md` 規則一第 1-4、6 點;使用端 JSON 通道可送達 `true`、`{}`、`[]`):
+     - 判定(`getItemsBadId`,讀值經 `getRowId`,只認自有可列舉之資料屬性,不執行 getter): 該值為 `undefined`、`null`、任何字串(含 `''`,其為未帶,非空字串為有效)、有限數字(R-ID-02 轉字串)者放行,**其餘一律無效**.只以 `typeof`、`Number.isFinite` 判型別,不呼叫任何方法,故不執行使用端程式(Proxy 陷阱、物件之 `toString` 等);包裝物件依 dspec §11 W-20(判斷只收原始值)為無效,**且於複製之前判定**——修前 `adjustData` 之複製(wsemi `clearXSS`)會把 `new String('a')` 拆成原始值 `'a'` 而當成有效主鍵寫入.
+     - 範圍(insert、save、mix.add、mix.diff,即補主鍵之全部入口,且僅限 isIdCast 為真之表,見規則 1): 單筆物件與批次皆然,整批拒絕且不寫入任何一筆(含同批之有效列與未帶列);**del、mix.del 不檢查**(本層不補主鍵,交後端逐筆處置: 無效主鍵之刪除由後端回 `ok:0`,本層以既有格式 `failed to delete data: <位置>` reject,表內容不變,R-PERITEM-01),另 `select`、`delAll` 之條件不屬此規則.`woItems` 直呼後端不經本層,維持.
+     - 訊息(固定詞彙,不回顯值,V20): 沿用 R-MSG-01 規則 3 之整批拒絕句型 `<失敗訊息起首>, invalid id: <位置>`——insert 為 `failed to insert data, invalid id: data[1], data[3]`,save 為 `failed to save data, invalid id: data[0]`,mix 之 add 為 `failed to insert data, invalid id: data[k]`、diff 為 `failed to update data, invalid id: data[k]`(同時有誤者以 `; ` 串接,add 在前);位置自 0 起、超過 10 筆只列前 10 筆並附 `, ... (N in total)`,單一物件視為 `data[0]`.採此句型而非全族後端之 `invalid id: not a string or finite number at [...]` 之理由: 本層既有之整批拒絕一律為「起首＋原因: 位置」(`not an object`、`id contains HTML markup`、`unsupported key[__proto__]` 等),使用端前端以整句為語系鍵(R-MSG-01 使用端影響),起首不同會使下游以起首分流之處失配;`invalid id` 字樣與全族一致可供 Grep.
+     - 通道: 與同類之整批拒絕相同(字串 reject,ORM 一次都不被呼叫,不執行後處理);診斷標籤 `<表>.insert invalid id`、`<表>.save invalid id`、`<表>.mix add invalid id`、`<表>.mix diff invalid id`,摘要 `{ n, ks }`、細節為位置清單,皆不含值(R-DIAG-01).
+     - 與 R-OBJ-01 列內走訪之關係(自查與唯讀複審所得): 列內走訪(`getMsgsBadKey`,非 strict)在本檢查之前,會讀 id 值本身之巢狀結構——id 值為已撤銷之 Proxy(或 `ownKeys` 等陷阱拋錯者)時由該走訪以 `unreadable value: data[k]` 拒絕(`unit-badid` B13,同為整批拒絕、零寫入,非 `invalid id`);id 值為陷阱不拋錯之 Proxy 時,該走訪仍會觸發其陷阱(實測計數 Proxy 3 次,修前尚加 `clearXSS` 之走訪),屬 R-OBJ-01 規則 7 之既有限制(寫入列不開 strict,巢狀值內之使用端程式於檢查期間可執行),本檢查本身(`getItemsBadId`)只以 `typeof`、`Number.isFinite` 判型別而不觸發任何陷阱.
+     - 檢查順序(R-INPUT-01 規則 4 續): woName、批次容器、各筆為物件、`__proto__`／存取器／深度之檢查**之後**,R-ID-02 轉型、R-XSS-01 預檢、R-MIX-01 同鍵檢查**之前**;故形狀與鍵不合者先回報其原訊息,字串主鍵含標記者與無效主鍵同批時先回報無效主鍵(檢查之值即使用之值: 本檢查讀未轉型之原列,castIdRows 只轉有限數字,二者判定等價).
+- 盤點指令: Grep `src/getMapOrm.mjs` 搜 `getItemsBadId`(定義 1 處、呼叫 2 處: execMapOrm 之 insert、save 分支與 mapOrm 之 mix 分支之 add、diff 迴圈);搜 `genIDSeq\(\)`(只應在 adjustData 之補值段,該處剩餘之非字串只有未帶者);搜 `v\.id =`(補值寫入處,只應有 adjustData 一處).
+- 站點全集與判準(2026-11-20,`src/getMapOrm.mjs`): `getItemsBadId` `:951`(判定); insert、save 呼叫 `:1264`(`if (idCast)` 區塊內,先於 castIdRows 與 getItemsIdXSS); mix 呼叫 `:1533`(add、diff 兩段,先於 castIdRows); adjustData 補值 `:1144`: 已套.del 分支 `:1370`、mix.del(mix 分支 `:1460` 起之 del 段)、select、delAll: 刻意不套(規則 5 範圍).
+- 測試: `test/unit-WServOrm.test.mjs` P01-P06;`test/api-procOrm.test.mjs` A05;`test/unit-mapOrm.test.mjs` X05、X07;`test/unit-pkcast.test.mjs` N05(改為拒絕)、N08、E04;**規則 5: `test/unit-badid.test.mjs` B01-B13(替身 ORM,四入口 x 25 型別 x 位置/單筆/批次、未帶與有效不變、繼承與不可列舉視為未提供、包裝物件不拆、適用範圍、del 通道不變、不回顯值、檢查順序、擴充函數產出之列、mix 兩段並列、不改呼叫端)、`test/api-badid.test.mjs` C01-C06(真 w-orm-lowdb: 表內容不變、JSON 通道值、以直呼後端為預言機、未帶與有效照寫、包裝物件不寫成 `'a'`、del 通道不變)**、共用語料 `test/tools/badIds.mjs`;`test/unit-objcopy.test.mjs` S08(JSON 語料預言機以 badPos 表達規則 5)、`test/unit-diaglog.test.mjs` P53-P56(診斷標籤與站點表)、S03、S04.
+- 變異(2026-11-20 第 568 項,副本 `tmp/osv568/mut-run.mjs`,不入版控,對 5 個測試檔 + S08): 見報告;摘要: 檢查移除(insert/save、mix 之 add、diff 各自)、型別放行(數字、布林、物件、BigInt/Symbol/函數)、未帶判定(`null`、`undefined`、`''`)、包裝物件拆包、位置偏移、訊息起首、適用條件放寬、讀 `v.id` 皆被殺死;唯一存活者為「檢查移到 castIdRows 之後」(等價: castIdRows 只把有限數字換成字串,二者皆放行).
 - 變更紀錄:
+  - 2026-11-20 第 568 項(未提交、未發布): **不相容**——字串型/未知型主鍵表之寫入列,主鍵給了而無效者(布林、物件、陣列、NaN、±Infinity、BigInt、Symbol、Date、函數、包裝物件)原補新主鍵寫入(`new String('a')` 經複製成 `'a'` 寫入),現整批 reject;見 README〈Breaking changes〉.未帶者(`undefined`、`null`、`''`、無鍵、繼承、不可列舉)與有限數字、非空字串、整數型主鍵表、del 通道不變.
   - 1.1.8(原回傳 `{ id: undefined }`,即 `{}`).
   - 1.1.10 之後(2026-10-14): 數字不再視為有效主鍵(字串型主鍵欄之有限數字改由 R-ID-02 轉字串);多筆批次中之空物件列改為補值(原不補而後端補值寫入,回報 undefined);型別字串去參數後比對.
 
@@ -26,9 +37,9 @@
      - 寫入: insert、save(陣列與物件)、mix.add、mix.diff.
      - 刪除: del(陣列與物件)、mix.del;mix 回報之 del 列亦為轉型後之值.
      - 查詢條件: select、delAll 之 find 中 id 之值,及其 `$eq`、`$ne`、`$gt`、`$gte`、`$lt`、`$lte`、`$in`、`$nin` 之值(陣列逐一);遞迴進入文件層 `$and`、`$or` 巢狀.他欄與其餘運算子(`$regex`、`$exists` 等)不變.範圍只及系列條件白名單內之運算子(R-WL-01): 原亦轉型之 `$all`、`$not`(遞迴 id 條件內)與 `$nor`(遞迴巢狀)在白名單外,由後端 reject,2026-10-19 起不轉型(死碼已移除).
-  3. NaN、±Infinity 視為未提供: 寫入時依 R-ID-01 補值;刪除與查詢條件原樣.
+  3. NaN、±Infinity 不是有限數字,不轉型: 寫入時為「給了而無效」,整批拒絕(R-ID-01 規則 5,2026-11-20 第 568 項;原視為未提供而補值);刪除與查詢條件原樣.
   4. 轉型寫於複本,不改呼叫端之物件與條件.
-  4 續. **列之主鍵值只認自有可列舉之資料屬性**(2026-10-20 第 82 項,`getRowId`,R-OBJ-01 規則 7 ①): castIdRows(寫入與刪除之列)與 getMixIdKey、getItemsIdXSS 讀主鍵一律經 `getRowId`——不可列舉、繼承、經存取器之有限數字 id 不再轉字串(原被轉為自有可列舉字串 id 寫入,與直呼後端〔忽略之並產生新主鍵〕不同; 且 getter 於檢查後被執行); 視為未提供,寫入列由 adjustData 補主鍵,del 與 mix.del 列原樣交後端(mix.del 列另受 R-MIX-01 規則 6 檢查).(2026-11-20 第 557 項: 繼承之非字串 id 於 w-orm-lowdb ≥ 1.0.72 直呼後端改為拒絕,本層仍視為未提供而補主鍵,見 R-OBJ-01 規則 7 之第 557 項之註.)
+  4 續. **列之主鍵值只認自有可列舉之資料屬性**(2026-10-20 第 82 項,`getRowId`,R-OBJ-01 規則 7 ①): castIdRows(寫入與刪除之列)與 getMixIdKey、getItemsIdXSS 讀主鍵一律經 `getRowId`——不可列舉、繼承、經存取器之有限數字 id 不再轉字串(原被轉為自有可列舉字串 id 寫入,與直呼後端〔忽略之並產生新主鍵〕不同; 且 getter 於檢查後被執行); 視為未提供,寫入列由 adjustData 補主鍵,del 與 mix.del 列原樣交後端(mix.del 列另受 R-MIX-01 規則 6 檢查).(2026-11-20 第 557 項: 繼承之非字串 id 於 w-orm-lowdb 1.0.72 直呼後端曾改為拒絕,本層仍視為未提供而補主鍵,見 R-OBJ-01 規則 7 之第 557 項之註; 第 569 項: w-orm-lowdb ≥ 1.0.73 起後端亦只認自有可列舉之主鍵,繼承或不可列舉者視為未帶而補主鍵,與本層同口徑,見規則 7 之第 569 項之註.)
   5. 後處理之 input 為前處理後之 input(不含本套件之補值與轉型,主鍵可能仍為數字),output 為回報(主鍵為字串),見 R-HOOK-01 規則 5.
 - 依據: 各後端之主鍵判準互異(lmdb、lowdb、level、mongodb 只認非空字串而以 genIDSeq 取代數字;reladb、mdb 之字串欄由資料庫把數字存為字串),原以「非空字串或數字」為有效而原樣回報,回報之 id 與實際寫入者不同、重送不斷新增、以回報 id 查不到刪不掉(審計 run01 全盤 M1-13～15).下游 perm、api 以 `String(id)` 判重.(2026-11-20 第 557 項: w-orm-lowdb ≥ 1.0.72 起對「給了而非字串」之主鍵改為拒絕、不再換成 genIDSeq; 本層先轉字串才交後端,經 procOrm 之數字主鍵不受影響,惟經 `woItems` 直呼之數字主鍵會被後端拒絕,轉型之必要性不減.)對標 Mongoose(寫入與查詢條件皆依 schema 轉型,含範圍運算子與 `$not`).
 - 已知限制:

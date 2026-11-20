@@ -150,17 +150,16 @@ describe('R-ID-02 字串型主鍵欄之數字主鍵以字串處置', function() 
         assert.deepStrictEqual(calls.slice(1).map((c) => c.data), [[{ id: 5 }], { id: 5 }, { id: { $in: [6] } }, [{ id: 7, name: 'b' }]])
     })
 
-    it('N05 NaN與正負Infinity視為未提供: 寫入補值且回報一致, 刪除與查詢原樣', async function() {
-        //R-ID-02 規則3; R-ID-01 規則1
+    it('N05 NaN與正負Infinity為給了而無效之主鍵: 寫入整批reject而不補值, 刪除與查詢原樣', async function() {
+        //R-ID-02 規則3; R-ID-01 規則5(第568項: 原視為未提供而補值, 現與w-orm-*全族一致, 給了而無效即拒絕)
         let so = WServOrm(dsStr, WOrmStub, 'u', 'd')
-        let r = await so.procOrm('u1', 'tests', 'insert', [{ id: NaN }, { id: Infinity }, { id: -Infinity }])
-        let got = calls[0].data.map((v) => v.id)
-        assert.ok(got.every(isGen), JSON.stringify(got))
-        assert.deepStrictEqual(r.map((v) => v.id), got)
+        let err = await quiet(() => getReject(so.procOrm('u1', 'tests', 'insert', [{ id: NaN }, { id: Infinity }, { id: -Infinity }])))
+        assert.strictEqual(err, 'failed to insert data, invalid id: data[0], data[1], data[2]')
+        assert.strictEqual(calls.length, 0, '未呼叫ORM')
         await so.procOrm('u1', 'tests', 'del', [{ id: Infinity }])
         await so.procOrm('u1', 'tests', 'select', { id: NaN })
-        assert.deepStrictEqual(calls[1].data, [{ id: Infinity }])
-        assert.deepStrictEqual(calls[2].data, { id: NaN })
+        assert.deepStrictEqual(calls[0].data, [{ id: Infinity }])
+        assert.deepStrictEqual(calls[1].data, { id: NaN })
     })
 
     it('N06 同批之數字與其字串形式為同一字串主鍵', async function() {

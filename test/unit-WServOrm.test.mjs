@@ -399,10 +399,11 @@ describe('procOrm補主鍵', function() {
     })
 
     it('P02 依主鍵值決定是否補值', async function() {
-        //R-ID-01 規則1: null、空字串、物件補值, 非空字串保留; R-ID-02 規則2: 字串型(或型別未知)主鍵欄之有限數字轉為其字串形式
+        //R-ID-01 規則1: null、空字串、缺主鍵補值, 非空字串保留; R-ID-02 規則2: 字串型(或型別未知)主鍵欄之有限數字轉為其字串形式
+        //(物件等給了而無效之主鍵於第568項起整批reject而不補值, 見 R-ID-01 規則5 與 unit-badid.test.mjs)
         let log = []
         let A = WServOrm(dsAll, mkWOrm('A', log), 'url-a', 'db-a')
-        let input = [{ id: null }, { id: '' }, { id: { x: 1 } }, { id: 123 }, { id: 'keep' }]
+        let input = [{ id: null }, { id: '' }, { name: 'no-id' }, { id: 123 }, { id: 'keep' }]
         let r = await A.procOrm('u1', 'tests', 'save', input)
         let got = log[0].data.map((v) => v.id)
         assert.ok(isId(got[0]) && isId(got[1]) && isId(got[2]))

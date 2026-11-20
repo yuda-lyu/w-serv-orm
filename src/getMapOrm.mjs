@@ -125,7 +125,7 @@ function isIdNumFinite(v) {
 
 
 function castIdValue(v) {
-    //主鍵值之正規化: 有限數字轉為其字串形式, 其餘原樣(NaN、±Infinity亦原樣, 寫入時由adjustData視為未提供而補值)
+    //主鍵值之正規化: 有限數字轉為其字串形式, 其餘原樣(NaN、±Infinity亦原樣: 寫入列於此之前已由getItemsBadId拒絕, 刪除與查詢條件則原樣交後端)
     //各後端之主鍵判準互異, lmdb、lowdb、level、mongodb只認非空字串而以genIDSeq取代數字(w-orm-lowdb >= 1.0.72起改為拒絕), reladb、mdb之字串欄由資料庫把數字存為字串,
     //故由本套件先轉, 令寫入、刪除與查詢條件同一規則, 回傳之主鍵與實際寫入者一致
     return isIdNumFinite(v) ? String(v) : v
@@ -948,6 +948,24 @@ function getItemsNotObj(data) {
 }
 
 
+function getItemsBadId(data) {
+    //寫入之各筆中, 主鍵「給了而無效」者之位置[{k}], k為其於輸入內之位置; 單一物件視為第0筆(R-ID-01 規則5, 第568項)
+    //未帶只有: 自有可列舉之資料屬性id為undefined、null、''(getRowId), 及其他(無id鍵、不可列舉、繼承, R-OBJ-01 規則7 ①)視為未提供者, 由adjustData補主鍵
+    //有效者: 非空字串, 及有限數字(字串型主鍵欄由castIdRows先轉為字串, R-ID-02); 其餘一律無效, 含NaN、±Infinity、BigInt、Symbol、布林、物件、陣列、Date、函數與包裝物件(new String、new Number等)
+    //只讀getRowId取得之值並以typeof、Number.isFinite判型別, 不呼叫任何方法, 故不執行使用端程式(Proxy之陷阱、物件之toString等); 須先於adjustData(其複製會把String包裝物件拆成原始值, 使無效者被當成有效主鍵)
+    let rs = []
+    each(isArr(data) ? data : [data], (v, k) => {
+        let id = getRowId(v)
+        //放行: undefined、null(未帶), 字串(空字串為未帶, 非空字串為有效), 有限數字(R-ID-02 轉為字串); 其餘為給了而無效
+        if (id === undefined || id === null || typeof id === 'string' || isIdNumFinite(id)) {
+            return
+        }
+        rs.push({ k })
+    })
+    return rs
+}
+
+
 function getMixIdKey(v) {
     //mix跨段比對用之主鍵鍵值(R-MIX-01): 以castIdValue正規化(有限數字取其字串形式, 與寫入、刪除之轉型同一函數), 正規化後為非空字串者取之, 其餘(未提供)不參與比對
     //主鍵經getRowId只認自有可列舉之資料屬性, 即adjustData之mapOwn實際寫入者(原get(v, 'id')會讀到不可列舉、繼承、經存取器之id而誤拒, R-MIX-01 規則6)
@@ -1113,7 +1131,8 @@ function adjustData(ds, woName, userId, data, mode = 'save', keepUserId = false,
     }
 
     //id, 未提供有效主鍵者由本套件補值, 令回傳之主鍵與實際寫入者一致, 補值器同各ORM之genIDSeq(R-ID-01)
-    //有效主鍵為非空字串: 字串型主鍵欄之有限數字已於mapOrm轉為字串(R-ID-02), 剩餘之數字(NaN、±Infinity)與其他型別視為未提供
+    //有效主鍵為非空字串: 字串型主鍵欄之有限數字已於mapOrm轉為字串(R-ID-02); 給了而無效者(NaN、±Infinity、布林、物件等)已於execMapOrm、mapOrm由getItemsBadId整批拒絕(R-ID-01 規則5, 第568項),
+    //故此處剩餘之非字串只有未帶者(undefined、null、''、無id鍵、繼承或不可列舉之id)
     //補值寫在上方之複本, 不改呼叫端原物件
     //輸入依wsemi之iseobj、isearr判為無效者(單一空物件、只含一個空物件之陣列)不補, 保留ORM視之為無效輸入(規格T5)而不寫入之行為;
     //多筆批次中之空物件列則補, 因後端照常補值寫入, 不補則回傳undefined而與實際不符
@@ -1239,8 +1258,16 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt, diag) {
             return Promise.reject(join(msgsBadKey, '; '))
         }
 
-        //castIdRows, 主鍵之有限數字轉為字串, 寫於複本(R-ID-02)
         if (idCast) {
+
+            //check, 主鍵給了而無效(非空字串、非有限數字, 且非未帶)者整批拒絕, 不補新主鍵, 不寫入任何一筆(R-ID-01 規則5); 於轉型與複製(adjustData)之前, 以免包裝物件被拆成原始值
+            let failsBadId = getItemsBadId(input)
+            if (size(failsBadId) > 0) {
+                diag(`${woName}.${mode} invalid id`, getBriefFails(failsBadId), () => failsBadId)
+                return Promise.reject(getMsgFail(`${msgMode}, invalid id`, failsBadId))
+            }
+
+            //castIdRows, 主鍵之有限數字轉為字串, 寫於複本(R-ID-02)
             input = castIdRows(input)
         }
 
@@ -1498,8 +1525,22 @@ async function execMapOrm(ds, woItems, userId, woName, mode, input, opt, diag) {
             return Promise.reject(getMsgFail(`failed to delete data, ${MSGS_BAD_KEY.irregular}`, failsIrregularId))
         }
 
-        //castIdRows, 各段主鍵之有限數字轉為字串, 寫於複本(R-ID-02)
         if (idCast) {
+
+            //check, 新增與修改之主鍵給了而無效者, 於任何步驟寫入之前整批拒絕, 不補新主鍵(R-ID-01 規則5); 於轉型與複製(adjustData)之前; del之各筆不檢查(交後端逐筆處置)
+            let msgsBadId = []
+            for (let [key, msg] of [['add', 'failed to insert data'], ['diff', 'failed to update data']]) {
+                let fails = getItemsBadId(get(input, key, []))
+                if (size(fails) > 0) {
+                    diag(`${woName}.mix ${key} invalid id`, getBriefFails(fails), () => fails)
+                    msgsBadId.push(getMsgFail(`${msg}, invalid id`, fails))
+                }
+            }
+            if (size(msgsBadId) > 0) {
+                return Promise.reject(join(msgsBadId, '; '))
+            }
+
+            //castIdRows, 各段主鍵之有限數字轉為字串, 寫於複本(R-ID-02)
             input = { ...input }
             for (let key of ['add', 'del', 'diff']) {
                 if (isarr(input[key])) {

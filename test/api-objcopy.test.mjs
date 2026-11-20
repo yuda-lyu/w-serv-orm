@@ -634,13 +634,16 @@ describe('R-OBJ-01 接w-orm-lowdb(以JS參考實作為預言機)', function() {
         return found
     }
 
-    it('A27 寫入列之id只認自有可列舉資料屬性: 自有不可列舉之id經procOrm之結果同直呼真ORM, 繼承之id視為未提供而補主鍵(不同於直呼); getter不被執行, 其加入之含__proto__欄位不被寫入; null原型品牌列被拒收(B-02 ①②③④)', async function() {
+    it('A27 寫入列之id只認自有可列舉資料屬性: 自有不可列舉或繼承之id經procOrm之結果同直呼真ORM(w-orm-lowdb >= 1.0.73), 皆視為未提供而補主鍵、不被復活為字串id; getter不被執行, 其加入之含__proto__欄位不被寫入; null原型品牌列被拒收(B-02 ①②③④)', async function() {
         //R-OBJ-01 規則7 ①②; 修前: 不可列舉/繼承之數字id被「復活」為自有字串id寫入(直呼則忽略並產生新主鍵); getter於檢查後被執行並可使meta含自有__proto__
-        //第557項(w-orm-lowdb >= 1.0.72): 真ORM對「給了而非字串」之主鍵改為拒絕(insert reject、save 該筆 ok:0), 不再靜默換新主鍵; 其對繼承之id(經原型鏈讀得, 其cloneDeep保留原型)亦視為「給了」,
-        //  故繼承數字id不再能以直呼為預言機(下方「繼承之id」段另依本層規則斷言並附直呼對照); 自有不可列舉之id因其cloneDeep不複製而仍視為未帶, 結果仍同本層, 續以直呼為預言機
+        //第569項(w-orm-lowdb >= 1.0.73): 真ORM之主鍵只認自有可列舉之資料屬性, 繼承或自有不可列舉之id(字串、數字、物件)一律視為未帶, autoGenPk開則補新主鍵, 與本層同口徑,
+        //  故自有不可列舉與繼承之id皆以直呼為預言機; 1.0.72 時繼承數字id直呼reject、繼承字串id直呼寫入無id欄之列(皆不同於本層), 該兩格曾移出預言機, 現放回
         let cases = [
             ['自有不可列舉數字id 123', () => [hideProp({ name: 'n3' }, 'id', 123)]],
             ['自有不可列舉字串id', () => [hideProp({ name: 'n3' }, 'id', 'a9')]],
+            ['繼承數字id 123', () => [Object.assign(Object.create({ id: 123 }), { name: 'n3' })]],
+            ['繼承字串id', () => [Object.assign(Object.create({ id: 'a9' }), { name: 'n3' })]],
+            ['繼承字串id同庫內既有列a1(顯出跳過/覆寫)', () => [Object.assign(Object.create({ id: 'a1' }), { name: 'n3' })]],
             ['單一物件(非陣列)之不可列舉數字id', () => hideProp({ name: 'n3' }, 'id', 456)],
             ['自有不可列舉getter(直呼不執行)', () => {
                 let r = { name: 'n3' }
@@ -664,31 +667,19 @@ describe('R-OBJ-01 接w-orm-lowdb(以JS參考實作為預言機)', function() {
                 assert.ok((await rows()).every((v) => v.id !== '123' && v.id !== '456'), `${mode} ${lab}: 數字id不被復活為字串id`)
             }
         }
-        //繼承之id(字串、數字): 真ORM(cloneDeep保留原型)於邏輯上讀到原型上之id——字串者序列化只含自有鍵而寫入無id之列或視為已存在, 數字者(w-orm-lowdb >= 1.0.72)視為「給了而非字串」而拒絕
-        //  (舊版靜默換新主鍵), 兩者皆與本層不同, 故不以直呼為預言機;
-        //本層規則7 ①: id只認自有可列舉資料屬性, 繼承者視為未提供(本層複製時只取自有可列舉鍵, ORM收到之列不帶繼承之id) → 寫入列補主鍵, 寫入內容為自有可列舉鍵, 繼承之數字id不被復活為字串id
-        for (let [lab, inh] of [['字串id', 'a9'], ['數字id', 123]]) {
+        //繼承之id(字串、數字、與庫內既有列同值之字串)另依本層規則7 ①獨立斷言(不取自直呼之結果, 預言機若再變動仍有依規格之斷言):
+        //  id只認自有可列舉資料屬性, 繼承者視為未提供(本層複製時只取自有可列舉鍵, ORM收到之列不帶繼承之id) → 寫入列補主鍵, 恰寫入一筆, 庫內既有列(含同值之a1)不被跳過/覆寫, 繼承之數字id不被復活為字串id
+        for (let [lab, inh] of [['字串id', 'a9'], ['數字id', 123], ['字串id同既有列a1', 'a1']]) {
             for (let mode of ['insert', 'save']) {
                 await reseed()
                 await quiet(() => proc(mode, [Object.assign(Object.create({ id: inh }), { name: 'n3' })]))
-                let got = (await rows()).filter((v) => v.name === 'n3')
+                let all = await rows()
+                let got = all.filter((v) => v.name === 'n3')
                 assert.strictEqual(got.length, 1, `${mode} 繼承${lab}: 寫入一筆`)
                 assert.ok(typeof got[0].id === 'string' && got[0].id.length > 30, `${mode} 繼承${lab}: 補主鍵, 實得 ${got[0].id}`)
-                assert.ok((await rows()).every((v) => v.id !== '123'), `${mode} 繼承${lab}: 數字id不被復活為字串id`)
+                assert.ok(all.every((v) => v.id !== '123'), `${mode} 繼承${lab}: 數字id不被復活為字串id`)
+                assert.deepStrictEqual(all.filter((v) => v.name !== 'n3'), seed, `${mode} 繼承${lab}: 庫內既有列不變`)
             }
-        }
-        //對照: 直呼真ORM(w-orm-lowdb >= 1.0.72, 第557項主鍵規則)對繼承之數字id為「給了而非字串」 → insert reject、save 該筆 ok:0, 表不變; 本層(上段)視為未提供而補主鍵, 即兩者於此格有意相異
-        {
-            let mkInh = () => [Object.assign(Object.create({ id: 123 }), { name: 'n3' })]
-            await reseed()
-            let before = await rows()
-            let errIns = await getReject(so.woItems.tabA.insert(mkInh()))
-            assert.ok(/invalid id: not a string/.test(String(errIns)), `直呼 insert 繼承數字id: reject, 實得 ${errIns}`)
-            same(await rows(), before, '直呼 insert 繼承數字id: 表不變')
-            let rSave = await so.woItems.tabA.save(mkInh())
-            assert.strictEqual(rSave.length, 1, '直呼 save 繼承數字id: 逐筆回報')
-            assert.strictEqual(rSave[0].ok, 0, '直呼 save 繼承數字id: 該筆 ok 為 0')
-            same(await rows(), before, '直呼 save 繼承數字id: 表不變')
         }
         //getter: 檢查通過後才被執行並向列加入含自有__proto__之meta(修前寫入); 現getter不被執行, 無自有__proto__鍵被寫入
         for (let [lab, mkWithCounter] of [
@@ -738,7 +729,7 @@ describe('R-OBJ-01 接w-orm-lowdb(以JS參考實作為預言機)', function() {
         }
     })
 
-    it('A27b mix同鍵: 不可列舉/繼承之id不誤拒, 結果同直呼真ORM依序insert、del; 自有同鍵仍reject; mix.del列之id為getter整批reject, 表不變(B-02 ④、F6)', async function() {
+    it('A27b mix同鍵: 不可列舉/繼承之id不誤拒, 結果同直呼真ORM(w-orm-lowdb >= 1.0.73)依序insert、del; 自有同鍵仍reject; mix.del列之id為getter整批reject, 表不變(B-02 ④、F6)', async function() {
         //R-MIX-01 規則1、6; 修前: 不可列舉之 add id 'a1' 與 del 'a1' 被誤拒; del 列 id 為 getter 時 add 之 a7 隨即被後端刪除而resolve
         //自有不可列舉: 直呼真ORM之lodash cloneDeep不複製不可列舉鍵, 新增列得到產生之主鍵, 同本層(以直呼為預言機)
         await reseed()
@@ -749,9 +740,14 @@ describe('R-OBJ-01 接w-orm-lowdb(以JS參考實作為預言機)', function() {
         await quiet(() => proc('mix', { add: [hideProp({ name: 'new' }, 'id', 'a1')], del: [{ id: 'a1' }] }))
         same(await snap(), direct, '不可列舉: 表內容同直呼(新增列補主鍵、a1被刪)')
         assert.ok((await rows()).every((v) => v.id !== 'a1'), '不可列舉: a1已刪')
-        //繼承: 真ORM於邏輯上讀到原型上之id(直呼時視為已存在而略過),與本層「只認自有可列舉」不同, 不以直呼為預言機; 本層視為未提供, 新增列補主鍵, a1被刪
+        //繼承: 第569項(w-orm-lowdb >= 1.0.73)起真ORM亦只認自有可列舉之主鍵, 繼承之id視為未帶而補主鍵(1.0.72 以前視為已存在而略過), 與本層同口徑, 以直呼為預言機: 新增列補主鍵, a1被刪
+        await reseed()
+        await so.woItems.tabA.insert([Object.assign(Object.create({ id: 'a1' }), { name: 'new' })])
+        await so.woItems.tabA.del([{ id: 'a1' }])
+        direct = await snap()
         await reseed()
         await quiet(() => proc('mix', { add: [Object.assign(Object.create({ id: 'a1' }), { name: 'new' })], del: [{ id: 'a1' }] }))
+        same(await snap(), direct, '繼承: 表內容同直呼(新增列補主鍵、a1被刪)')
         let after = await rows()
         assert.ok(after.every((v) => v.id !== 'a1'), '繼承: a1已刪')
         assert.strictEqual(after.filter((v) => v.name === 'new').length, 1, '繼承: 新增列已寫入')

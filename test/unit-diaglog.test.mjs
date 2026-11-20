@@ -155,6 +155,11 @@ let PATHS = [
     { id: 'P50', title: 'insert之主鍵含HTML標記', mode: 'insert', input: () => [{ id: `${SECRET}<b`, name: 'a' }], plan: {}, reject: 'failed to insert data, id contains HTML markup: data[0]', label: 'tests.insert id changed by clearXSS', safe: { n: 1, ks: [0] }, detail: [[{ k: 0, id: `${SECRET}<b` }]], leak: true },
     { id: 'P51', title: 'insert之adjustData拋錯', mode: 'insert', input: ROWS, ds: { tests: {} }, plan: {}, reject: 'failed to adjust data', label: 'tests.adjustData catch', safe: { errType: 'TypeError' }, detail: isStr(/^TypeError: /), leak: false },
     { id: 'P52', title: 'insert之批次容器有空洞', mode: 'insert', input: () => new Array(2), plan: {}, reject: 'failed to insert data, unsupported sparse array: data[0]', label: 'tests.insert invalid batch container', safe: undefined, detail: undefined, leak: false },
+    //主鍵給了而無效(第568項, R-ID-01 規則5): 訊息、摘要與細節皆只有位置, 不含被拒之值(其值為SECRET之物件亦然)
+    { id: 'P53', title: 'insert之主鍵給了而無效', mode: 'insert', input: () => [{ id: { secret: SECRET }, name: 'a' }], plan: {}, reject: 'failed to insert data, invalid id: data[0]', label: 'tests.insert invalid id', safe: { n: 1, ks: [0] }, detail: [[{ k: 0 }]], leak: false },
+    { id: 'P54', title: 'save之主鍵給了而無效', mode: 'save', input: () => [{ id: [SECRET], name: 'a' }], plan: {}, reject: 'failed to save data, invalid id: data[0]', label: 'tests.save invalid id', safe: { n: 1, ks: [0] }, detail: [[{ k: 0 }]], leak: false },
+    { id: 'P55', title: 'mix之add主鍵給了而無效', mode: 'mix', input: () => ({ add: [{ id: Object(SECRET), name: 'a' }] }), plan: {}, reject: 'failed to insert data, invalid id: data[0]', label: 'tests.mix add invalid id', safe: { n: 1, ks: [0] }, detail: [[{ k: 0 }]], leak: false },
+    { id: 'P56', title: 'mix之diff主鍵給了而無效', mode: 'mix', input: () => ({ diff: [{ id: true, name: 'a' }] }), plan: {}, reject: 'failed to update data, invalid id: data[0]', label: 'tests.mix diff invalid id', safe: { n: 1, ks: [0] }, detail: [[{ k: 0 }]], leak: false },
 ]
 
 
@@ -677,6 +682,7 @@ describe('console診斷輸出站點盤點(R-DIAG-01)', function() {
             'getBriefFails(fails)',
             'getBriefFails(failsNotObj)',
             'getBriefFails(failsIdXSS)',
+            'getBriefFails(failsBadId)',
             'getBriefFails(failsDup)',
             'getBriefFails(failsIrregularId)',
             'getBriefResult(r)',
@@ -690,8 +696,8 @@ describe('console診斷輸出站點盤點(R-DIAG-01)', function() {
         'getSettings.mjs': ['{ keys: ks.filter((v) => KEYS_KNOWN.indexOf(v) >= 0), nOther: ks.filter((v) => KEYS_KNOWN.indexOf(v) < 0).length }', 'diag.brief(err)'],
         'getWoItems.mjs': ['getBriefType(ds)', 'getBriefType(WOrm)', 'getBriefType(url)', 'getBriefType(db)'],
     }
-    //各檔 diag 呼叫數(新增站點須先歸類並更新): 2026-10-28 共66處(2026-10-29 mig-servorm 遷移後不變)
-    let SITE_COUNTS = { 'genTestData.mjs': 2, 'getDb.mjs': 8, 'getDbBackupAndRecover.mjs': 7, 'getMapOrm.mjs': 43, 'getSettings.mjs': 2, 'getWoItems.mjs': 4 }
+    //各檔 diag 呼叫數(新增站點須先歸類並更新): 2026-10-28 共66處(2026-10-29 mig-servorm 遷移後不變; 2026-11-20 第568項 getMapOrm 增2處: insert/save 與 mix 之「主鍵給了而無效」, 共68處)
+    let SITE_COUNTS = { 'genTestData.mjs': 2, 'getDb.mjs': 8, 'getDbBackupAndRecover.mjs': 7, 'getMapOrm.mjs': 45, 'getSettings.mjs': 2, 'getWoItems.mjs': 4 }
 
     function splitTop(s) {
         //依最外層逗號切分引數(忽略括號、中括號、大括號、字串與反引號模板內)

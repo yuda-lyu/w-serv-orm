@@ -2387,7 +2387,8 @@ describe('JSON來源之一般輸入行為鎖定(S08): 第82項修正不改變資
     })
 
     //預言機: 樸素之參考實作(R-ID-02 轉型、R-ID-01 補值、R-INPUT-01 形狀), 輸入一律為 JSON.parse(JSON.stringify()) 之樹, 與修正前後之行為皆相同
-    //(同一語料於 HEAD 之 src 亦全綠, 證明預言機本身正確; 修正後仍全綠, 證明 JSON 來源之行為未變)
+    //(同一語料於第82項前後之 src 皆全綠, 證明預言機本身正確; 修正後仍全綠, 證明 JSON 來源之行為未變)
+    //第568項(R-ID-01 規則5)起之唯一刻意差異: 字串型/未知型主鍵表, 寫入列之主鍵「給了而無效」(語料內為布林、物件、陣列; 未帶者null、''、缺不變)者整批reject, 不再補主鍵寫入; 預言機以 badPos 與 msgBad 表達
     const GEN = '<GEN>'
     const OPS = ['$eq', '$ne', '$gt', '$gte', '$lt', '$lte', '$in', '$nin']
     let castId = (v, cast) => (cast && typeof v === 'number' && Number.isFinite(v) ? String(v) : v)
@@ -2432,6 +2433,18 @@ describe('JSON來源之一般輸入行為鎖定(S08): 第82項修正不改變資
         }
         return one ? rows[0] : rows
     }
+    //寫入列中主鍵給了而無效者之位置(R-ID-01 規則5): 未帶(缺、null、'')與有效(非空字串、有限數字)以外, 語料內即布林、物件、陣列
+    let badPos = (data) => {
+        let ks = []
+        ;(Array.isArray(data) ? data : [data]).forEach((v, k) => {
+            if (!('id' in v) || v.id === null || v.id === '' || typeof v.id === 'string' || (typeof v.id === 'number' && Number.isFinite(v.id))) {
+                return
+            }
+            ks.push(k)
+        })
+        return ks
+    }
+    let msgBad = (msg, ks) => `${msg}, invalid id: ${ks.map((k) => `data[${k}]`).join(', ')}`
     let refDel = (data, cast) => {
         let one = !Array.isArray(data)
         let rows = (one ? [data] : data).map((v) => (cast && typeof v.id === 'number' && Number.isFinite(v.id) ? { ...v, id: String(v.id) } : v))
@@ -2554,6 +2567,11 @@ describe('JSON來源之一般輸入行為鎖定(S08): 第82項修正不改變資
                     if (mode === 'insert' || mode === 'save') {
                         input = json(rows('A', 1000, true))
                         expectCalls = [{ fn: mode, data: refWrite(json(input), cast) }]
+                        let ks = cast ? badPos(input) : []
+                        if (ks.length > 0) {
+                            expectErr = msgBad(mode === 'insert' ? 'failed to insert data' : 'failed to save data', ks)
+                            expectCalls = []
+                        }
                     }
                     else if (mode === 'del') {
                         input = json(rows('D', 2000, true))
@@ -2581,6 +2599,19 @@ describe('JSON來源之一般輸入行為鎖定(S08): 第82項修正不改變資
                         }
                         if (diff && diff.length > 0) {
                             expectCalls.push({ fn: 'save', data: refWrite(json(diff), cast) })
+                        }
+                        let msgs = []
+                        let ksAdd = cast && add ? badPos(add) : []
+                        let ksDiff = cast && diff ? badPos(diff) : []
+                        if (ksAdd.length > 0) {
+                            msgs.push(msgBad('failed to insert data', ksAdd))
+                        }
+                        if (ksDiff.length > 0) {
+                            msgs.push(msgBad('failed to update data', ksDiff))
+                        }
+                        if (msgs.length > 0) {
+                            expectErr = msgs.join('; ')
+                            expectCalls = []
                         }
                     }
                     else {
