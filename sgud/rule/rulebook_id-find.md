@@ -7,7 +7,7 @@
 - 狀態: 已套(1.1.8;1.1.10 之後依 R-ID-02 修訂有效主鍵之判定與空物件列).
 - 單一擁有者: `src/getMapOrm.mjs` adjustData(補值段)、isPkIdString.
 - 規則:
-  1. insert、save、mix 之 add 與 diff,數據未帶有效主鍵者補值.有效主鍵為非空字串;字串型主鍵欄之有限數字先依 R-ID-02 轉為字串,故剩餘之數字(NaN、±Infinity)與其他型別(null、''、布林、物件、陣列、Date、BigInt)皆視為未提供而補值.條件(即 isPkIdString): 主鍵欄為 id;有 settings 者須標為 pk;型別為 STRING、TEXT、CHAR、UUID、CITEXT 或未知(比對前取 `(` 之前之字並轉大寫,`STRING(36)` 視為 STRING).補值器為 wsemi 之 genIDSeq,與各 w-orm 後端相同.
+  1. insert、save、mix 之 add 與 diff,數據未帶有效主鍵者補值.有效主鍵為非空字串;字串型主鍵欄之有限數字先依 R-ID-02 轉為字串,故剩餘之數字(NaN、±Infinity)與其他型別(null、''、布林、物件、陣列、Date、BigInt)皆視為未提供而補值.條件(即 isPkIdString): 主鍵欄為 id;有 settings 者須標為 pk;型別為 STRING、TEXT、CHAR、UUID、CITEXT 或未知(比對前取 `(` 之前之字並轉大寫,`STRING(36)` 視為 STRING).補值器為 wsemi 之 genIDSeq,與各 w-orm 後端相同.(2026-11-20 第 557 項: 「相同」限補值器; w-orm-lowdb ≥ 1.0.72 對「給了而非字串」之主鍵〔布林、物件、陣列、NaN 等〕已改為拒絕而非換成新主鍵,本層對此類值仍視為未提供而補值——本輪未改,屬待裁示,見 state 之已知缺口.)
   2. 補值寫於清除 XSS 後之複本,不改呼叫端之物件.
   3. 輸入依 wsemi 之 iseobj(單一物件)或 isearr(陣列)判為無效者不補,保留後端視之為無效輸入(規格 T5)而不寫入之行為: 即單一空物件 `{}` 與只含一個空物件之陣列 `[{}]`.其餘(含多筆批次中之空物件列)一律補值,令回傳之主鍵與後端實際寫入者一致.
   4. resolve 時回傳補出之主鍵;reject 時不回傳,故重送未帶主鍵之數據會重複寫入,需冪等者自帶主鍵.
@@ -28,9 +28,9 @@
      - 查詢條件: select、delAll 之 find 中 id 之值,及其 `$eq`、`$ne`、`$gt`、`$gte`、`$lt`、`$lte`、`$in`、`$nin` 之值(陣列逐一);遞迴進入文件層 `$and`、`$or` 巢狀.他欄與其餘運算子(`$regex`、`$exists` 等)不變.範圍只及系列條件白名單內之運算子(R-WL-01): 原亦轉型之 `$all`、`$not`(遞迴 id 條件內)與 `$nor`(遞迴巢狀)在白名單外,由後端 reject,2026-10-19 起不轉型(死碼已移除).
   3. NaN、±Infinity 視為未提供: 寫入時依 R-ID-01 補值;刪除與查詢條件原樣.
   4. 轉型寫於複本,不改呼叫端之物件與條件.
-  4 續. **列之主鍵值只認自有可列舉之資料屬性**(2026-10-20 第 82 項,`getRowId`,R-OBJ-01 規則 7 ①): castIdRows(寫入與刪除之列)與 getMixIdKey、getItemsIdXSS 讀主鍵一律經 `getRowId`——不可列舉、繼承、經存取器之有限數字 id 不再轉字串(原被轉為自有可列舉字串 id 寫入,與直呼後端〔忽略之並產生新主鍵〕不同; 且 getter 於檢查後被執行); 視為未提供,寫入列由 adjustData 補主鍵,del 與 mix.del 列原樣交後端(mix.del 列另受 R-MIX-01 規則 6 檢查).
+  4 續. **列之主鍵值只認自有可列舉之資料屬性**(2026-10-20 第 82 項,`getRowId`,R-OBJ-01 規則 7 ①): castIdRows(寫入與刪除之列)與 getMixIdKey、getItemsIdXSS 讀主鍵一律經 `getRowId`——不可列舉、繼承、經存取器之有限數字 id 不再轉字串(原被轉為自有可列舉字串 id 寫入,與直呼後端〔忽略之並產生新主鍵〕不同; 且 getter 於檢查後被執行); 視為未提供,寫入列由 adjustData 補主鍵,del 與 mix.del 列原樣交後端(mix.del 列另受 R-MIX-01 規則 6 檢查).(2026-11-20 第 557 項: 繼承之非字串 id 於 w-orm-lowdb ≥ 1.0.72 直呼後端改為拒絕,本層仍視為未提供而補主鍵,見 R-OBJ-01 規則 7 之第 557 項之註.)
   5. 後處理之 input 為前處理後之 input(不含本套件之補值與轉型,主鍵可能仍為數字),output 為回報(主鍵為字串),見 R-HOOK-01 規則 5.
-- 依據: 各後端之主鍵判準互異(lmdb、lowdb、level、mongodb 只認非空字串而以 genIDSeq 取代數字;reladb、mdb 之字串欄由資料庫把數字存為字串),原以「非空字串或數字」為有效而原樣回報,回報之 id 與實際寫入者不同、重送不斷新增、以回報 id 查不到刪不掉(審計 run01 全盤 M1-13～15).下游 perm、api 以 `String(id)` 判重.對標 Mongoose(寫入與查詢條件皆依 schema 轉型,含範圍運算子與 `$not`).
+- 依據: 各後端之主鍵判準互異(lmdb、lowdb、level、mongodb 只認非空字串而以 genIDSeq 取代數字;reladb、mdb 之字串欄由資料庫把數字存為字串),原以「非空字串或數字」為有效而原樣回報,回報之 id 與實際寫入者不同、重送不斷新增、以回報 id 查不到刪不掉(審計 run01 全盤 M1-13～15).下游 perm、api 以 `String(id)` 判重.(2026-11-20 第 557 項: w-orm-lowdb ≥ 1.0.72 起對「給了而非字串」之主鍵改為拒絕、不再換成 genIDSeq; 本層先轉字串才交後端,經 procOrm 之數字主鍵不受影響,惟經 `woItems` 直呼之數字主鍵會被後端拒絕,轉型之必要性不減.)對標 Mongoose(寫入與查詢條件皆依 schema 轉型,含範圍運算子與 `$not`).
 - 已知限制:
   - 範圍運算子轉型後依字串之字典序比較(與 reladb 現況、Mongoose 一致).
   - 數字之字串形式為 JavaScript 之 `String(v)`(`1e21` → `'1e+21'`);經 reladb(sqlite)、mdb(Jet)以數字直接寫入之舊資料,其存值格式可能不同(`'1.0e+21'`、`'1000000000000000000000'`),以數字查不到.一般十進位寫法之數字相同.

@@ -5,7 +5,7 @@ import ds from '../schema/index.mjs'
 import WServOrm from '../src/WServOrm.mjs'
 
 
-//以真ORM(w-orm-lowdb, 主鍵固定為字串id, 數字主鍵原會被其以genIDSeq取代)經procOrm驗證R-ID-02、R-MIX-01; schema之tests表之id為STRING pk
+//以真ORM(w-orm-lowdb, 主鍵固定為字串id, 數字主鍵原會被其以genIDSeq取代, >= 1.0.72起改為拒絕, 故本層先依schema轉字串)經procOrm驗證R-ID-02、R-MIX-01; schema之tests表之id為STRING pk
 let fd = './test/_tmp/api-pkcast'
 
 async function getReject(pm) {

@@ -634,12 +634,13 @@ describe('R-OBJ-01 接w-orm-lowdb(以JS參考實作為預言機)', function() {
         return found
     }
 
-    it('A27 寫入列之id只認自有可列舉資料屬性: 不可列舉/繼承之id經procOrm之結果同直呼真ORM; getter不被執行, 其加入之含__proto__欄位不被寫入; null原型品牌列被拒收(B-02 ①②③④)', async function() {
+    it('A27 寫入列之id只認自有可列舉資料屬性: 自有不可列舉之id經procOrm之結果同直呼真ORM, 繼承之id視為未提供而補主鍵(不同於直呼); getter不被執行, 其加入之含__proto__欄位不被寫入; null原型品牌列被拒收(B-02 ①②③④)', async function() {
         //R-OBJ-01 規則7 ①②; 修前: 不可列舉/繼承之數字id被「復活」為自有字串id寫入(直呼則忽略並產生新主鍵); getter於檢查後被執行並可使meta含自有__proto__
+        //第557項(w-orm-lowdb >= 1.0.72): 真ORM對「給了而非字串」之主鍵改為拒絕(insert reject、save 該筆 ok:0), 不再靜默換新主鍵; 其對繼承之id(經原型鏈讀得, 其cloneDeep保留原型)亦視為「給了」,
+        //  故繼承數字id不再能以直呼為預言機(下方「繼承之id」段另依本層規則斷言並附直呼對照); 自有不可列舉之id因其cloneDeep不複製而仍視為未帶, 結果仍同本層, 續以直呼為預言機
         let cases = [
             ['自有不可列舉數字id 123', () => [hideProp({ name: 'n3' }, 'id', 123)]],
             ['自有不可列舉字串id', () => [hideProp({ name: 'n3' }, 'id', 'a9')]],
-            ['繼承數字id', () => [Object.assign(Object.create({ id: 123 }), { name: 'n3' })]],
             ['單一物件(非陣列)之不可列舉數字id', () => hideProp({ name: 'n3' }, 'id', 456)],
             ['自有不可列舉getter(直呼不執行)', () => {
                 let r = { name: 'n3' }
@@ -663,14 +664,31 @@ describe('R-OBJ-01 接w-orm-lowdb(以JS參考實作為預言機)', function() {
                 assert.ok((await rows()).every((v) => v.id !== '123' && v.id !== '456'), `${mode} ${lab}: 數字id不被復活為字串id`)
             }
         }
-        //繼承之字串id: 真ORM(lodash cloneDeep保留原型)於邏輯上讀到原型上之id, 但序列化只含自有鍵, 結果與本層不同(直呼寫入無id之列或視為已存在), 故不以直呼為預言機;
-        //本層規則7 ①: id只認自有可列舉資料屬性, 繼承者視為未提供 → 寫入列補主鍵, 寫入內容為自有可列舉鍵
-        for (let mode of ['insert', 'save']) {
+        //繼承之id(字串、數字): 真ORM(cloneDeep保留原型)於邏輯上讀到原型上之id——字串者序列化只含自有鍵而寫入無id之列或視為已存在, 數字者(w-orm-lowdb >= 1.0.72)視為「給了而非字串」而拒絕
+        //  (舊版靜默換新主鍵), 兩者皆與本層不同, 故不以直呼為預言機;
+        //本層規則7 ①: id只認自有可列舉資料屬性, 繼承者視為未提供(本層複製時只取自有可列舉鍵, ORM收到之列不帶繼承之id) → 寫入列補主鍵, 寫入內容為自有可列舉鍵, 繼承之數字id不被復活為字串id
+        for (let [lab, inh] of [['字串id', 'a9'], ['數字id', 123]]) {
+            for (let mode of ['insert', 'save']) {
+                await reseed()
+                await quiet(() => proc(mode, [Object.assign(Object.create({ id: inh }), { name: 'n3' })]))
+                let got = (await rows()).filter((v) => v.name === 'n3')
+                assert.strictEqual(got.length, 1, `${mode} 繼承${lab}: 寫入一筆`)
+                assert.ok(typeof got[0].id === 'string' && got[0].id.length > 30, `${mode} 繼承${lab}: 補主鍵, 實得 ${got[0].id}`)
+                assert.ok((await rows()).every((v) => v.id !== '123'), `${mode} 繼承${lab}: 數字id不被復活為字串id`)
+            }
+        }
+        //對照: 直呼真ORM(w-orm-lowdb >= 1.0.72, 第557項主鍵規則)對繼承之數字id為「給了而非字串」 → insert reject、save 該筆 ok:0, 表不變; 本層(上段)視為未提供而補主鍵, 即兩者於此格有意相異
+        {
+            let mkInh = () => [Object.assign(Object.create({ id: 123 }), { name: 'n3' })]
             await reseed()
-            await quiet(() => proc(mode, [Object.assign(Object.create({ id: 'a9' }), { name: 'n3' })]))
-            let got = (await rows()).filter((v) => v.name === 'n3')
-            assert.strictEqual(got.length, 1, `${mode} 繼承字串id: 寫入一筆`)
-            assert.ok(typeof got[0].id === 'string' && got[0].id.length > 30, `${mode} 繼承字串id: 補主鍵, 實得 ${got[0].id}`)
+            let before = await rows()
+            let errIns = await getReject(so.woItems.tabA.insert(mkInh()))
+            assert.ok(/invalid id: not a string/.test(String(errIns)), `直呼 insert 繼承數字id: reject, 實得 ${errIns}`)
+            same(await rows(), before, '直呼 insert 繼承數字id: 表不變')
+            let rSave = await so.woItems.tabA.save(mkInh())
+            assert.strictEqual(rSave.length, 1, '直呼 save 繼承數字id: 逐筆回報')
+            assert.strictEqual(rSave[0].ok, 0, '直呼 save 繼承數字id: 該筆 ok 為 0')
+            same(await rows(), before, '直呼 save 繼承數字id: 表不變')
         }
         //getter: 檢查通過後才被執行並向列加入含自有__proto__之meta(修前寫入); 現getter不被執行, 無自有__proto__鍵被寫入
         for (let [lab, mkWithCounter] of [

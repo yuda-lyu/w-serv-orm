@@ -126,7 +126,7 @@ function isIdNumFinite(v) {
 
 function castIdValue(v) {
     //主鍵值之正規化: 有限數字轉為其字串形式, 其餘原樣(NaN、±Infinity亦原樣, 寫入時由adjustData視為未提供而補值)
-    //各後端之主鍵判準互異, lmdb、lowdb、level、mongodb只認非空字串而以genIDSeq取代數字, reladb、mdb之字串欄由資料庫把數字存為字串,
+    //各後端之主鍵判準互異, lmdb、lowdb、level、mongodb只認非空字串而以genIDSeq取代數字(w-orm-lowdb >= 1.0.72起改為拒絕), reladb、mdb之字串欄由資料庫把數字存為字串,
     //故由本套件先轉, 令寫入、刪除與查詢條件同一規則, 回傳之主鍵與實際寫入者一致
     return isIdNumFinite(v) ? String(v) : v
 }
